@@ -84,3 +84,38 @@ def test_address_mismatch_is_high_risk() -> None:
     assert fact(assessment, "shipping_address_matches").value is False
     assert assessment.risk is RiskLevel.HIGH
 
+
+def test_existing_refund_is_high_risk() -> None:
+    assessment = assess_evidence(complete_inr(refund=RefundData(True)))
+
+    assert fact(assessment, "prior_refund_exists").value is True
+    assert assessment.risk is RiskLevel.HIGH
+
+
+def test_incomplete_payment_is_high_risk() -> None:
+    assessment = assess_evidence(
+        complete_inr(payment=PaymentData("PENDING", ADDRESS))
+    )
+
+    assert assessment.risk is RiskLevel.HIGH
+    assert "payment_completed" not in assessment.supporting_fact_ids
+
+
+def test_missing_order_information_is_unknown_and_high_risk() -> None:
+    assessment = assess_evidence(EvidenceInput(ITEM_NOT_RECEIVED))
+
+    assert fact(assessment, "payment_completed").status is FactStatus.UNKNOWN
+    assert assessment.risk is RiskLevel.HIGH
+
+
+def test_conflicting_shipment_evidence_is_high_risk() -> None:
+    assessment = assess_evidence(
+        complete_inr(shipment=ShipmentData(False, "DELIVERED", ADDRESS))
+    )
+
+    consistency = next(
+        rule for rule in assessment.rules if rule.rule_id == "evidence_consistency"
+    )
+    assert consistency.outcome is RuleOutcome.FAIL
+    assert assessment.risk is RiskLevel.HIGH
+
