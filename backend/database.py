@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -123,6 +124,48 @@ def finish(run_id: UUID, status: str, result: dict[str, Any], merchant: str) -> 
         if row is None:
             raise HTTPException(409, 'Execution record is no longer reserved.')
         audit(conn, run_id, status, merchant, result)
+
+
+def reconcile_message(run_id: UUID, dispute: dict[str, Any], merchant: str) -> None:
+    """Record confirmation from a freshly retrieved dispute without dispatching a write."""
+    with connect() as conn:
+        run = conn.execute(
+            '''SELECT r.*, d.merchant_id FROM runs r JOIN disputes d USING (dispute_id)
+               WHERE run_id=%s FOR UPDATE OF r''', (run_id,),
+        ).fetchone()
+        if run is None or run['dispute_id'] != dispute.get('dispute_id'):
+            raise HTTPException(409, 'Reconciliation dispute does not match the run.')
+        if run['merchant_id'] != merchant or run['approved_by'] != merchant:
+            raise HTTPException(403, 'Reconciliation merchant does not match approval.')
+        if (run['approval_state'] != 'APPROVED'
+                or run['execution_status'] != 'REQUIRES_RECONCILIATION'
+                or run['action_type'] != 'SEND_MESSAGE'
+                or (run['paypal_result'] or {}).get('http_status') != 200):
+            raise HTTPException(409, 'Run is not eligible for HTTP 200 reconciliation.')
+        matches = [m for m in dispute.get('messages') or []
+                   if m.get('content') == run['message']]
+        if len(matches) != 1 or matches[0].get('posted_by') != 'SELLER':
+            raise HTTPException(409, 'Exactly one matching seller message is required.')
+        try:
+            posted_at = datetime.fromisoformat(matches[0].get('time_posted', ''))
+        except (TypeError, ValueError) as error:
+            raise HTTPException(409, 'Message timestamp is unavailable.') from error
+        if (posted_at.tzinfo is None or posted_at < run['approved_at']
+                or posted_at > datetime.now(timezone.utc)):
+            raise HTTPException(409, 'Message timestamp does not confirm this approval.')
+        conn.execute(
+            "UPDATE runs SET execution_status='SUCCEEDED', executed_at=%s WHERE run_id=%s",
+            (posted_at, run_id),
+        )
+        audit(conn, run_id, 'SUCCEEDED', merchant, {
+            'reconciliation': True,
+            'previous_execution_status': run['execution_status'],
+            'source': f"GET /v1/customer/disputes/{run['dispute_id']}",
+            'matching_message_count': 1,
+            'message': {'content': run['message'], 'posted_by': 'SELLER',
+                        'time_posted': posted_at.isoformat()},
+            'original_paypal_result': run['paypal_result'],
+        })
 
 
 if __name__ == '__main__':

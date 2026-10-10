@@ -266,7 +266,10 @@ def assessment_for_dispute(
     return assess_paypal_dispute(dispute, capture, source)
 
 
-MESSAGE = 'We are reviewing your dispute and will follow up with additional information.'
+MESSAGE = (
+    'This is a DisputePilot sandbox test. The merchant is reviewing the dispute. '
+    'No shipment or delivery confirmation is available.'
+)
 
 
 def authenticate_merchant(

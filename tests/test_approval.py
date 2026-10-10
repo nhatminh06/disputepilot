@@ -2,6 +2,7 @@ import ast
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
@@ -177,6 +178,35 @@ def test_success_audit_and_duplicate(client, run, postgres, monkeypatch):
     assert row['idempotency_key'] is not None
 
 
+def test_detail_link_success_is_persisted(client, run, postgres, monkeypatch):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(url)
+        result = requests.Response()
+        result.status_code = 200
+        result._content = json.dumps({'links': [{
+            'rel': 'detail', 'method': 'GET',
+            'href': f'{main.DEFAULT_PAYPAL_BASE_URL}/v1/customer/disputes/{DISPUTE}',
+        }]}).encode()
+        return result
+
+    monkeypatch.setattr(requests, 'post', post)
+    result = approve(client, run)
+    assert result.status_code == 200
+    assert result.json()['execution_status'] == 'SUCCEEDED'
+    assert approve(client, run).status_code == 409
+    assert len(calls) == 1
+    with postgres() as conn:
+        row = conn.execute('SELECT * FROM runs WHERE run_id=%s', (run['run_id'],)).fetchone()
+    assert row['execution_status'] == 'SUCCEEDED'
+    assert row['executed_at'] is not None
+    assert row['approved_by'] == 'test-merchant'
+    assert [e['event_type'] for e in events(postgres, run)] == [
+        'INVESTIGATED', 'APPROVED', 'EXECUTION_RESERVED', 'SUCCEEDED',
+    ]
+
+
 @pytest.mark.parametrize('separate_run', [False, True])
 def test_concurrent_approval(client, run, upstream, monkeypatch, separate_run):
     other = run
@@ -265,6 +295,9 @@ def test_database_failure_after_send_keeps_reservation(client, run, postgres, mo
 
 
 @pytest.mark.parametrize('code,body,expected', [
+    (200, {'links': [{'rel': 'detail', 'method': 'GET',
+                     'href': f'https://api-m.sandbox.paypal.com/v1/customer/disputes/{DISPUTE}'}]},
+     'SUCCEEDED'),
     (200, {'links': [{'rel': 'self', 'method': 'GET',
                      'href': f'https://api-m.sandbox.paypal.com/v1/customer/disputes/{DISPUTE}'}]},
      'SUCCEEDED'),
@@ -325,3 +358,50 @@ def test_only_approval_route_imports_write_module():
                 assert node in list(ast.walk(approve_fn))
     assert importers == ['main.py']
     assert not list(Path('backend').glob('*agent*'))
+
+
+@pytest.mark.parametrize('case', ['confirmed', 'missing', 'duplicate', 'buyer', 'old'])
+def test_reconciliation_preserves_history_without_resending(
+    client, run, postgres, case,
+):
+    database.reserve(run['run_id'], DISPUTE, 'test-merchant', {'dispute_id': DISPUTE})
+    original_result = {'http_status': 200, 'body': {'links': [{
+        'rel': 'detail', 'method': 'GET',
+        'href': f'{main.DEFAULT_PAYPAL_BASE_URL}/v1/customer/disputes/{DISPUTE}',
+    }]}}
+    database.finish(run['run_id'], 'REQUIRES_RECONCILIATION', original_result,
+                    'test-merchant')
+    before = events(postgres, run)
+    with postgres() as conn:
+        original = conn.execute('SELECT * FROM runs WHERE run_id=%s',
+                                (run['run_id'],)).fetchone()
+    message = {'content': main.MESSAGE, 'posted_by': 'SELLER',
+               'time_posted': datetime.now(timezone.utc).isoformat()}
+    messages = [message]
+    if case == 'missing':
+        messages = []
+    elif case == 'duplicate':
+        messages = [message, message]
+    elif case == 'buyer':
+        message['posted_by'] = 'BUYER'
+    elif case == 'old':
+        message['time_posted'] = '2000-01-01T00:00:00Z'
+    payload = {'dispute_id': DISPUTE, 'messages': messages}
+    if case == 'confirmed':
+        database.reconcile_message(run['run_id'], payload, 'test-merchant')
+        assert events(postgres, run)[:-1] == before
+        assert events(postgres, run)[-1]['data']['reconciliation'] is True
+    else:
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException):
+            database.reconcile_message(run['run_id'], payload, 'test-merchant')
+        assert events(postgres, run) == before
+    with postgres() as conn:
+        after = conn.execute('SELECT * FROM runs WHERE run_id=%s',
+                             (run['run_id'],)).fetchone()
+    for key in ('approved_by', 'approved_at', 'idempotency_key', 'paypal_result'):
+        assert after[key] == original[key]
+    assert after['execution_status'] == (
+        'SUCCEEDED' if case == 'confirmed' else 'REQUIRES_RECONCILIATION'
+    )
+    assert approve(client, run).status_code == 409

@@ -50,7 +50,7 @@ POST HATEOAS link before committing the approval and execution reservation.
 Supported reasons are the three reasons already supported by the evidence engine.
 The fixed message is:
 
-> We are reviewing your dispute and will follow up with additional information.
+> This is a DisputePilot sandbox test. The merchant is reviewing the dispute. No shipment or delivery confirmation is available.
 
 Successful execution returns HTTP 200 with `run_id`, `execution_status`, and
 `paypal_result` containing the real upstream HTTP status and sanitized response.

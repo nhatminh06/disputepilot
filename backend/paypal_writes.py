@@ -62,7 +62,7 @@ def send_message(
     links = body.get('links') or []
     expected_path = f'/v1/customer/disputes/{dispute_id}'
     acknowledged = any(
-        link.get('rel') == 'self' and link.get('method') == 'GET'
+        link.get('rel') in ('self', 'detail') and link.get('method') == 'GET'
         and link.get('href') in {
             f'https://api-m.sandbox.paypal.com{expected_path}',
             f'https://api.sandbox.paypal.com{expected_path}',
