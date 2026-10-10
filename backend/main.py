@@ -1,16 +1,21 @@
 import json
 import os
 import re
+import secrets
 import sys
 from dataclasses import asdict, replace
 from typing import Annotated, Any, NoReturn
 from urllib.parse import urlsplit
+from uuid import UUID
 
+import psycopg
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Path
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, Path
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, StrictBool
 
+from backend import database
 from backend.evidence import EvidenceInput, PaymentData, assess_evidence
 
 
@@ -259,3 +264,119 @@ def assessment_for_dispute(
             )
             source += f": lookup failed HTTP {status}"
     return assess_paypal_dispute(dispute, capture, source)
+
+
+MESSAGE = 'We are reviewing your dispute and will follow up with additional information.'
+
+
+def authenticate_merchant(
+    authorization: Annotated[str | None, Header()] = None,
+) -> str:
+    expected = os.getenv('DEV_MERCHANT_TOKEN', '')
+    merchant = os.getenv('DEV_MERCHANT_ID', '')
+    if len(expected) < 32 or not merchant:
+        raise HTTPException(503, 'Development merchant credentials are not configured.')
+    scheme, _, supplied = (authorization or '').partition(' ')
+    if scheme.lower() != 'bearer' or not secrets.compare_digest(
+        supplied.encode(), expected.encode(),
+    ):
+        raise HTTPException(401, 'Merchant authentication required.',
+                            headers={'WWW-Authenticate': 'Bearer'})
+    return merchant
+
+
+class ApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    run_id: UUID
+    action_type: str
+    confirmed: StrictBool
+
+
+@app.post('/api/disputes/{dispute_id}/investigate', status_code=201)
+def investigate(
+    dispute_id: Annotated[str, Path(pattern=r'^[A-Z0-9-]{1,255}$')],
+    merchant: Annotated[str, Depends(authenticate_merchant)],
+) -> dict[str, Any]:
+    base_url = paypal_base_url()
+    try:
+        token = get_access_token(base_url)
+        dispute = get_dispute(base_url, token, dispute_id)
+        if dispute.get('dispute_id') != dispute_id:
+            raise HTTPException(502, 'PayPal returned a different dispute.')
+        assessment = assessment_for_dispute(base_url, token, dispute)
+    except requests.RequestException as error:
+        raise_paypal_error(error)
+    try:
+        return database.create_run(parse_dispute(dispute).model_dump(),
+                                   assessment, merchant, MESSAGE)
+    except psycopg.Error as error:
+        raise HTTPException(503, 'Could not persist investigation.') from error
+
+
+def verify_message_allowed(dispute: dict[str, Any], dispute_id: str) -> None:
+    if (
+        dispute.get('dispute_id') != dispute_id
+        or dispute.get('dispute_life_cycle_stage') != 'INQUIRY'
+        or dispute.get('status') != 'WAITING_FOR_SELLER_RESPONSE'
+        or dispute.get('reason') not in {
+            'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+            'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED', 'UNAUTHORISED',
+        }
+    ):
+        raise HTTPException(409, 'Current dispute does not permit this action.')
+    for link in dispute.get('links') or []:
+        if link.get('rel') not in ('send_message', 'send-message'):
+            continue
+        href = link.get('href')
+        expected = f'/v1/customer/disputes/{dispute_id}/send-message'
+        if link.get('method') == 'POST' and href in {
+            f'https://api-m.sandbox.paypal.com{expected}',
+            f'https://api.sandbox.paypal.com{expected}',
+        }:
+            return
+    raise HTTPException(409, 'PayPal does not currently offer send_message.')
+
+
+@app.post('/disputes/{dispute_id}/approve')
+def approve(
+    dispute_id: Annotated[str, Path(pattern=r'^[A-Z0-9-]{1,255}$')],
+    request: ApprovalRequest,
+    merchant: Annotated[str, Depends(authenticate_merchant)],
+) -> JSONResponse:
+    if request.action_type != 'SEND_MESSAGE':
+        raise HTTPException(422, 'Only SEND_MESSAGE is supported.')
+    if not request.confirmed:
+        raise HTTPException(422, 'Explicit merchant confirmation is required.')
+    base_url = paypal_base_url()
+    try:
+        run = database.get_pending_run(request.run_id, dispute_id, merchant)
+    except psycopg.Error as error:
+        raise HTTPException(503, 'Database unavailable. No action was dispatched.') from error
+    if run['action_type'] != 'SEND_MESSAGE' or run['message'] != MESSAGE:
+        raise HTTPException(409, 'Run does not contain the supported message action.')
+    try:
+        token = get_access_token(base_url)
+        current = get_dispute(base_url, token, dispute_id)
+    except requests.RequestException as error:
+        raise_paypal_error(error)
+    verify_message_allowed(current, dispute_id)
+    try:
+        database.reserve(request.run_id, dispute_id, merchant,
+                         parse_dispute(current).model_dump())
+    except psycopg.Error as error:
+        raise HTTPException(503, 'Reservation failed. No action was dispatched.') from error
+
+    from backend.paypal_writes import send_message
+
+    status, result = send_message(base_url, token, dispute_id, run['message'])
+    try:
+        database.finish(request.run_id, status, result, merchant)
+    except psycopg.Error as error:
+        raise HTTPException(
+            503, 'Result persistence failed. Action requires reconciliation; do not retry.',
+        ) from error
+    return JSONResponse(
+        status_code=200 if status == 'SUCCEEDED' else 502,
+        content={'run_id': str(request.run_id), 'execution_status': status,
+                 'paypal_result': result},
+    )
