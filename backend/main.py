@@ -1,12 +1,17 @@
 import json
 import os
+import re
 import sys
+from dataclasses import asdict, replace
 from typing import Annotated, Any, NoReturn
+from urllib.parse import urlsplit
 
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Path
 from pydantic import BaseModel
+
+from backend.evidence import EvidenceInput, PaymentData, assess_evidence
 
 
 load_dotenv()
@@ -32,7 +37,14 @@ class DisputeResponse(BaseModel):
 
 def paypal_base_url() -> str:
     base_url = os.getenv("PAYPAL_BASE_URL", DEFAULT_PAYPAL_BASE_URL).rstrip("/")
-    if "sandbox" not in base_url.lower():
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc not in {"api-m.sandbox.paypal.com", "api.sandbox.paypal.com"}
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
         raise HTTPException(
             status_code=500,
             detail="PAYPAL_BASE_URL must point to PayPal Sandbox.",
@@ -52,6 +64,7 @@ def get_access_token(base_url: str) -> str:
         headers={"Accept": "application/json"},
         data={"grant_type": "client_credentials"},
         timeout=REQUEST_TIMEOUT_SECONDS,
+        allow_redirects=False,
     )
     response.raise_for_status()
     return response.json()["access_token"]
@@ -62,6 +75,7 @@ def get_dispute(base_url: str, token: str, dispute_id: str) -> dict[str, Any]:
         f"{base_url}/v1/customer/disputes/{dispute_id}",
         headers={"Authorization": f"Bearer {token}"},
         timeout=REQUEST_TIMEOUT_SECONDS,
+        allow_redirects=False,
     )
     response.raise_for_status()
     return response.json()
@@ -163,3 +177,85 @@ def read_dispute(
     except requests.RequestException as error:
         raise_paypal_error(error)
     return parse_dispute(payload)
+
+
+def get_capture(base_url: str, token: str, capture_id: str) -> dict[str, Any]:
+    response = requests.get(
+        f"{base_url}/v2/payments/captures/{capture_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        allow_redirects=False,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def capture_id_for_dispute(payload: dict[str, Any]) -> str | None:
+    transactions = payload.get("disputed_transactions") or []
+    if len(transactions) != 1:
+        return None
+    capture_id = transactions[0].get("seller_transaction_id")
+    if isinstance(capture_id, str) and re.fullmatch(r"[A-Z0-9-]+", capture_id):
+        return capture_id
+    return None
+
+
+def assess_paypal_dispute(
+    dispute: dict[str, Any],
+    capture: dict[str, Any] | None,
+    payment_source: str,
+) -> dict[str, Any]:
+    capture_id = capture_id_for_dispute(dispute)
+    payment = None
+    # A held dispute transaction is not the historical capture status.
+    if capture and capture_id and capture.get("id") == capture_id:
+        if capture.get("status") == "COMPLETED":
+            payment = PaymentData("COMPLETED", source=payment_source)
+        else:
+            payment_source += ": historical completion not established by current status"
+    assessment = assess_evidence(
+        EvidenceInput(dispute_reason=dispute.get("reason") or "", payment=payment)
+    )
+    assessment = replace(
+        assessment,
+        facts=[
+            replace(fact, source=payment_source)
+            if fact.fact_id == "payment_completed" else fact
+            for fact in assessment.facts
+        ],
+    )
+    return {"dispute_id": dispute["dispute_id"], **asdict(assessment)}
+
+
+@app.get("/api/disputes/{dispute_id}/assessment")
+def read_assessment(
+    dispute_id: Annotated[str, Path(pattern=r"^[A-Z0-9-]+$")],
+) -> dict[str, Any]:
+    base_url = paypal_base_url()
+    try:
+        token = get_access_token(base_url)
+        dispute = get_dispute(base_url, token, dispute_id)
+    except requests.RequestException as error:
+        raise_paypal_error(error)
+    return assessment_for_dispute(base_url, token, dispute)
+
+
+def assessment_for_dispute(
+    base_url: str, token: str, dispute: dict[str, Any],
+) -> dict[str, Any]:
+    capture_id = capture_id_for_dispute(dispute)
+    capture = None
+    source = "paypal.disputed_transactions: missing or ambiguous seller transaction ID"
+    if capture_id:
+        source = f"paypal:/v2/payments/captures/{capture_id}"
+        try:
+            capture = get_capture(base_url, token, capture_id)
+        except requests.RequestException as error:
+            response = error.response
+            status = response.status_code if response is not None else "not available"
+            print(
+                f"PayPal failure HTTP {status}: {sanitized_body(response, error)}",
+                file=sys.stderr,
+            )
+            source += f": lookup failed HTTP {status}"
+    return assess_paypal_dispute(dispute, capture, source)
