@@ -119,3 +119,42 @@ def test_conflicting_shipment_evidence_is_high_risk() -> None:
     assert consistency.outcome is RuleOutcome.FAIL
     assert assessment.risk is RiskLevel.HIGH
 
+
+def test_unsupported_reason_requires_review() -> None:
+    assessment = assess_evidence(EvidenceInput("OTHER"))
+
+    assert assessment.risk is RiskLevel.HIGH
+    assert assessment.requires_review is True
+    assert assessment.rules[0].rule_id == "supported_dispute_reason"
+
+
+def test_not_as_described_with_insufficient_evidence() -> None:
+    assessment = assess_evidence(
+        EvidenceInput(
+            NOT_AS_DESCRIBED,
+            payment=PaymentData("COMPLETED"),
+            policy=PolicyData(True),
+            refund=RefundData(False),
+            description=DescriptionData(item_description="Blue shirt"),
+        )
+    )
+
+    assert fact(assessment, "condition_evidence").status is FactStatus.MISSING
+    assert assessment.risk is RiskLevel.MEDIUM
+    assert assessment.requires_review is True
+
+
+def test_unauthorized_claim_with_insufficient_evidence() -> None:
+    assessment = assess_evidence(
+        EvidenceInput(
+            UNAUTHORISED,
+            payment=PaymentData("COMPLETED"),
+            policy=PolicyData(True),
+            refund=RefundData(False),
+            authorization=AuthorizationData(),
+        )
+    )
+
+    assert fact(assessment, "authorization_evidence").status is FactStatus.MISSING
+    assert assessment.risk is RiskLevel.MEDIUM
+    assert assessment.requires_review is True
