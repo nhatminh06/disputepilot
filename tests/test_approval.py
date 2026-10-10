@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from backend import database, main, paypal_writes
+from backend import database, gemini, main, paypal_writes
 
 
 DISPUTE = 'PP-R-TEST'
@@ -34,6 +34,20 @@ def client(monkeypatch):
     monkeypatch.setenv('DEV_MERCHANT_TOKEN', TOKEN)
     monkeypatch.setenv('DEV_MERCHANT_ID', 'test-merchant')
     monkeypatch.setenv('PAYPAL_BASE_URL', main.DEFAULT_PAYPAL_BASE_URL)
+    monkeypatch.setattr(gemini, 'recommend', lambda assessment: {
+        'model': 'test-model', 'api_status': 'OK', 'http_status': None,
+        'attempts': 1, 'usage': [], 'fallback': False,
+        'response': {
+            'recommendation': 'NEEDS_REVIEW',
+            'summary': 'Synthetic evidence requires merchant review.',
+            'supporting_fact_ids': [], 'policy_refs': [],
+            'missing_information': [
+                'delivery_confirmed', 'merchant_policy_supports_contest',
+                'payment_completed', 'prior_refund_exists',
+                'shipment_record_exists', 'shipping_address_matches',
+            ],
+        },
+    })
     with TestClient(main.app) as client:
         yield client
 
@@ -82,6 +96,9 @@ def run(client, postgres, upstream):
     result = client.post(f'/api/disputes/{DISPUTE}/investigate', headers=AUTH)
     assert result.status_code == 201
     assert result.json()['investigation_status'] == 'NEEDS_REVIEW'
+    assert result.json()['assessment']['recommendation']['response'][
+        'recommendation'
+    ] == 'NEEDS_REVIEW'
     return result.json()
 
 
