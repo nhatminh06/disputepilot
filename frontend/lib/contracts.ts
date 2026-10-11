@@ -39,6 +39,7 @@ export interface Recommendation {
     recommendation: 'CONTEST' | 'REFUND' | 'NEEDS_REVIEW';
     summary: string;
     supporting_fact_ids: string[];
+    adverse_fact_ids?: string[];
     policy_refs: string[];
     missing_information: string[];
   };
@@ -74,6 +75,7 @@ export interface SavedRun extends Run {
 }
 export interface History {
   dispute_id: string;
+  paypal_writes_enabled: boolean;
   runs: SavedRun[];
   approved_action: { run_id: string; execution_status: string; approved_at: string | null; executed_at: string | null } | null;
 }
@@ -119,6 +121,14 @@ export function parseDispute(value: unknown): Dispute {
     requested_evidence_types: list(d.requested_evidence_types, string),
     available_actions: list(d.available_actions, string),
   };
+}
+
+export function adverseFactIds(assessment: Assessment): string[] {
+  return assessment.facts.filter(fact => fact.status === 'VERIFIED' &&
+    !assessment.supporting_fact_ids.includes(fact.fact_id) &&
+    assessment.rules.some(rule => rule.outcome === 'FAIL' && rule.rule_id === fact.fact_id &&
+      rule.fact_ids.length === 1 && rule.fact_ids[0] === fact.fact_id)
+  ).map(fact => fact.fact_id);
 }
 
 export function parseAssessment(value: unknown): Assessment {
@@ -168,12 +178,16 @@ export function parseAssessment(value: unknown): Assessment {
       response: {
         recommendation: choice(r.recommendation, ['CONTEST', 'REFUND', 'NEEDS_REVIEW'] as const),
         summary: string(r.summary), supporting_fact_ids: list(r.supporting_fact_ids, string),
+        adverse_fact_ids: r.adverse_fact_ids === undefined ? [] : list(r.adverse_fact_ids, string),
         policy_refs: list(r.policy_refs, string), missing_information: list(r.missing_information, string),
       },
     };
     const response = assessment.recommendation.response;
     const refs = assessment.retrieved_policies.map(p => `${p.policy_id}#${p.section_id}`);
-    if (response.supporting_fact_ids.some(id => !assessment.supporting_fact_ids.includes(id)) ||
+    const adverse = adverseFactIds(assessment);
+    if (response.supporting_fact_ids.some(id => !assessment.supporting_fact_ids.includes(id) ||
+          !assessment.facts.some(fact => fact.fact_id === id && fact.status === 'VERIFIED')) ||
+        response.adverse_fact_ids?.some(id => !adverse.includes(id) || response.supporting_fact_ids.includes(id)) ||
         response.policy_refs.some(ref => !refs.includes(ref))) throw new Error('Invalid citations');
   }
   return assessment;
@@ -211,7 +225,7 @@ export function parseHistory(value: unknown): History {
     };
   }).slice(0, 25);
   const action = h.approved_action == null ? null : object(h.approved_action);
-  return { dispute_id, runs, approved_action: action ? {
+  return { dispute_id, runs, paypal_writes_enabled: h.paypal_writes_enabled === true, approved_action: action ? {
     run_id: string(action.run_id), execution_status: string(action.execution_status),
     approved_at: nullable(action.approved_at), executed_at: nullable(action.executed_at),
   } : null };

@@ -17,7 +17,7 @@ const eligibilityText = {
 async function readHistory(id: string, signal?: AbortSignal): Promise<History> {
   const response = await fetch(`/api/disputes/${id}/history`, { cache: 'no-store', signal });
   // Unknown and non-owned records both return 404 without disclosing ownership.
-  if (response.status === 404) return { dispute_id: id, runs: [], approved_action: null };
+  if (response.status === 404) return { dispute_id: id, runs: [], approved_action: null, paypal_writes_enabled: false };
   if (!response.ok) throw new Error(`History unavailable (HTTP ${response.status}). Approval is disabled.`);
   const data = parseHistory(await response.json());
   if (data.dispute_id !== id) throw new Error('History returned a different dispute.');
@@ -56,7 +56,7 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
     return () => controller.abort();
   }, [load, newRunId]);
   const run = history?.runs.find(item => item.run_id === selected) ?? null;
-  const eligible = !!run && run.eligibility === 'ELIGIBLE' && !history?.approved_action &&
+  const eligible = history?.paypal_writes_enabled === true && !!run && run.eligibility === 'ELIGIBLE' && !history?.approved_action &&
     run.action_type === 'SEND_MESSAGE' && run.approval_state === 'PENDING' && run.execution_status === 'NOT_STARTED' &&
     !error && !loading && !sending && !attempted;
 
@@ -100,7 +100,8 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
     <AuditTimeline run={run} />
     <section className="card history-section" aria-labelledby="merchant-title"><div className="card-heading"><div className="heading-with-icon"><LockKeyhole size={18} /><h2 id="merchant-title">Merchant approval</h2></div><span className="badge badge-blue">SEND_MESSAGE only</span></div>
       <div className="approval-content"><p>This sends a real PayPal Sandbox message. It is not a refund, contest submission, evidence submission, or automatic resolution.</p>
-        {run ? <><p className="approval-state">{eligibilityText[run.eligibility]}</p><p>Stored approval: <strong>{run.approval_state}</strong> · Execution: <strong>{run.execution_status}</strong></p>
+        {history && !history.paypal_writes_enabled && <p className="history-warning" role="status">Demo mode: PayPal actions disabled</p>}
+        {run ? <><p className="approval-state">{!history?.paypal_writes_enabled && run.eligibility === 'ELIGIBLE' ? 'This pending run cannot be executed in demo mode.' : eligibilityText[run.eligibility]}</p><p>Stored approval: <strong>{run.approval_state}</strong> · Execution: <strong>{run.execution_status}</strong></p>
           {run.execution_status === 'SUCCEEDED' && <p>Successful execution recorded: {timestamp(run.executed_at)}</p>}
           {eligible && <button className="button primary" onClick={() => setDialog(true)}>Review message for approval</button>}
         </> : <p>Select a saved run to review its action and eligibility.</p>}

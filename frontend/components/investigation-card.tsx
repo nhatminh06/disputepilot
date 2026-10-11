@@ -18,6 +18,8 @@ export default function InvestigationCard({ run, busy, error, disabled, onInvest
       <div className="recommendation-risk"><span>Deterministic risk</span><strong>{run.assessment.risk}</strong></div>
       <h4>Supporting evidence</h4>
       {response.supporting_fact_ids.length ? <div className="citation-list">{response.supporting_fact_ids.map(id => <a key={id} href={`#fact-${id}`}><Check size={13} />{factLabel(id)}</a>)}</div> : <p className="small muted">No verified supporting facts cited.</p>}
+      <h4>Verified evidence requiring attention</h4>
+      {response.adverse_fact_ids?.length ? <div className="citation-list adverse-label">{response.adverse_fact_ids.map(id => <a key={id} href={`#fact-${id}`}><TriangleAlert size={13} />{factLabel(id)}</a>)}</div> : <p className="small muted">No verified adverse facts cited.</p>}
       <h4>Missing information</h4>
       {response.missing_information.length ? <ul className="missing-list">{response.missing_information.map(id => <li key={id}><CircleHelp size={14} />{factLabel(id)}</li>)}</ul> : <p className="small muted">No missing information reported by the evidence engine.</p>}
       {response.policy_refs.length > 0 && <><h4>Policy citations</h4><div className="citation-list">{response.policy_refs.map(ref => <a key={ref} href={`#policy-${ref.replace('#', '-')}`}>{ref}</a>)}</div></>}

@@ -26,6 +26,7 @@ def _fallback(evidence: dict[str, Any]) -> dict[str, Any]:
         "recommendation": "NEEDS_REVIEW",
         "summary": "Recommendation could not be validated. Merchant review is required.",
         "supporting_fact_ids": [],
+        "adverse_fact_ids": [],
         "policy_refs": [],
         "missing_information": gemini.missing_fact_ids(evidence),
     }
@@ -90,6 +91,8 @@ def evaluate_scenario(scenario: Scenario) -> dict[str, Any]:
         == gemini.missing_fact_ids(evidence),
         "citations_grounded": set(recommendation["supporting_fact_ids"])
         <= set(assessment.supporting_fact_ids),
+        "adverse_citations_grounded": set(recommendation.get("adverse_fact_ids", []))
+        <= set(gemini.adverse_fact_ids(evidence)),
         "policy_refs_grounded": set(recommendation["policy_refs"]) <= set(policies),
     }
     failed = [
@@ -225,6 +228,7 @@ def run() -> dict[str, Any]:
             "executed_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "code_revision": _revision(),
             "mode": MODE,
+            "citation_schema_version": 2,
         },
         "metrics": {
             "total_scenarios": len(scenarios),
@@ -326,7 +330,38 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true", help="Evaluate without writing report files."
     )
+    parser.add_argument("--live", action="store_true", help="Use live Gemini.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show sanitized live inputs without API calls."
+    )
+    parser.add_argument(
+        "--confirm-live", action="store_true",
+        help="Explicitly authorize one live evaluation of at most 12 requests.",
+    )
     args = parser.parse_args()
+    if args.live:
+        if args.check:
+            parser.error("Use --live --dry-run for a preview, not --check.")
+        from evaluation import live
+
+        if args.dry_run:
+            print(json.dumps(live.preview(), indent=2))
+            return 0
+        if not args.confirm_live:
+            parser.error("Live requests require separate explicit --confirm-live consent.")
+        try:
+            result = live.run(confirmed=True)
+        except (ValueError, OSError) as error:
+            # Configuration and file errors may contain local secrets or paths.
+            print(f"Live evaluation stopped: {type(error).__name__}. "
+                  "Check model, credentials, file permissions, and existing reports. "
+                  "Inspect any checkpoint before authorizing another run.")
+            return 2
+        print(json.dumps(result['metrics'], indent=2))
+        print(f"Live report saved. Stop reason: {result['stop_reason'] or 'none'}")
+        return 0 if live.successful(result) else 1
+    if args.dry_run or args.confirm_live:
+        parser.error("--dry-run and --confirm-live require --live.")
     result = run()
     if not args.check:
         RESULTS_PATH.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

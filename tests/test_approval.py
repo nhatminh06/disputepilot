@@ -31,6 +31,7 @@ def no_network(monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.setenv('PAYPAL_WRITES_ENABLED', 'true')
     monkeypatch.delenv('GEMINI_AGENT_ENABLED', raising=False)
     monkeypatch.setenv('DEV_MERCHANT_TOKEN', TOKEN)
     monkeypatch.setenv('DEV_MERCHANT_ID', 'test-merchant')
@@ -58,8 +59,19 @@ def postgres(monkeypatch):
     url = os.getenv('TEST_DATABASE_URL')
     if not url:
         pytest.skip('TEST_DATABASE_URL is required for PostgreSQL integration tests')
+    params = psycopg.conninfo.conninfo_to_dict(url)
+    if (params.get('dbname') != 'disputepilot_approval_test'
+            or params.get('user') != 'approval_test'
+            or params.get('host') != '127.0.0.1'
+            or not params.get('port')
+            or os.getenv('DISPUTEPILOT_TEST_ISOLATED') != 'true'):
+        pytest.fail('Refusing destructive fixtures without an isolated approval test database.')
     schema = 'approval_test_' + uuid4().hex
     with psycopg.connect(url, autocommit=True) as conn:
+        if conn.execute('SELECT current_database(), current_user').fetchone() != (
+            'disputepilot_approval_test', 'approval_test',
+        ):
+            pytest.fail('Test database identity mismatch.')
         conn.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
 
     def connect():
@@ -79,6 +91,8 @@ def postgres(monkeypatch):
 def upstream(monkeypatch):
     dispute = {
         'dispute_id': DISPUTE,
+        'messages': [{'posted_by': 'BUYER', 'content': 'Synthetic buyer inquiry.',
+                      'time_posted': '2026-01-01T00:00:00Z'}],
         'status': 'WAITING_FOR_SELLER_RESPONSE',
         'dispute_life_cycle_stage': 'INQUIRY',
         'reason': 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
@@ -128,7 +142,9 @@ def test_history_projection_and_eligibility(client, postgres, run):
     assert stored['eligibility'] == 'ELIGIBLE'
     assert stored['message'] == main.MESSAGE
     assert stored['assessment']['risk'] == run['assessment']['risk']
-    assert stored['assessment']['recommendation']['response'] == run['assessment']['recommendation']['response']
+    assert stored['assessment']['recommendation']['response'] == main.gemini.Recommendation.model_validate(
+        run['assessment']['recommendation']['response'],
+    ).model_dump()
     assert stored['audit_events'][0]['actor'] == 'Merchant'
     assert not any(key in response.text for key in (
         'idempotency_key', 'paypal_result', 'access_token', 'private@example.test',
@@ -312,6 +328,94 @@ def test_unknown_run(client, postgres):
 def test_wrong_merchant(client, run, monkeypatch):
     monkeypatch.setenv('DEV_MERCHANT_ID', 'different-merchant')
     assert approve(client, run).status_code == 403
+
+
+@pytest.mark.parametrize('flag', [None, 'false', '', 'TRUE', 'True', '1', 'yes', ' true', 'true '])
+def test_disabled_writes_leave_run_and_audit_untouched(client, run, postgres, monkeypatch, flag):
+    if flag is None:
+        monkeypatch.delenv('PAYPAL_WRITES_ENABLED', raising=False)
+    else:
+        monkeypatch.setenv('PAYPAL_WRITES_ENABLED', flag)
+    calls = mock_write(monkeypatch)
+    def unexpected(*args, **kwargs):
+        pytest.fail('Disabled approval must not read PayPal or reserve an action')
+    monkeypatch.setattr(main, 'get_access_token', unexpected)
+    monkeypatch.setattr(database, 'reserve', unexpected)
+    with postgres() as conn:
+        before = conn.execute('SELECT * FROM runs WHERE run_id=%s', (run['run_id'],)).fetchone()
+    result = approve(client, run)
+    assert result.status_code == 403
+    assert result.json()['detail'] == 'Demo mode: PayPal actions disabled.'
+    assert calls == []
+    with postgres() as conn:
+        assert conn.execute('SELECT * FROM runs WHERE run_id=%s', (run['run_id'],)).fetchone() == before
+    assert [e['event_type'] for e in events(postgres, run)] == ['INVESTIGATED']
+    history = client.get(f'/api/disputes/{DISPUTE}/history', headers=AUTH).json()
+    assert history['paypal_writes_enabled'] is False
+    assert history['runs'][0]['eligibility'] == 'INELIGIBLE'
+
+
+@pytest.mark.parametrize('messages', [
+    None, [], {}, [None], [{}],
+    [{'posted_by': 'SELLER', 'content': 'incomplete'}],
+    [{'posted_by': 'UNKNOWN', 'content': 'text', 'time_posted': '2026-01-01T00:00:00Z'}],
+    [{'posted_by': 'SELLER', 'content': None, 'time_posted': '2026-01-01T00:00:00Z'}],
+    [{'posted_by': 'SELLER', 'content': 'text', 'time_posted': 'invalid'}],
+    [{'posted_by': 'SELLER', 'content': 'text', 'time_posted': '2026-01-01'}],
+    [{'posted_by': 'SELLER', 'content': 'text', 'time_posted': '2999-01-01T00:00:00Z'}],
+])
+def test_untrusted_history_blocks_before_reservation(client, run, postgres, upstream, monkeypatch, messages):
+    upstream['messages'] = messages
+    calls = mock_write(monkeypatch)
+    assert approve(client, run).status_code == 409
+    assert calls == []
+    assert [e['event_type'] for e in events(postgres, run)] == ['INVESTIGATED']
+    with postgres() as conn:
+        row = conn.execute('SELECT * FROM runs WHERE run_id=%s', (run['run_id'],)).fetchone()
+    assert row['approval_state'] == 'PENDING'
+    assert row['execution_status'] == 'NOT_STARTED'
+
+
+@pytest.mark.parametrize('case', ['missing', 'capped', 'pagination', 'duplicate'])
+def test_remote_history_protects_fresh_database(client, run, postgres, upstream, monkeypatch, case):
+    if case == 'missing':
+        del upstream['messages']
+    elif case == 'capped':
+        upstream['messages'] *= 1000
+    elif case == 'pagination':
+        upstream['links'].append({'rel': 'next', 'method': 'GET'})
+    else:
+        upstream['messages'].append({'posted_by': 'SELLER', 'content': main.MESSAGE,
+                                     'time_posted': '2026-01-02T00:00:00Z'})
+    calls = mock_write(monkeypatch)
+    assert approve(client, run).status_code == 409
+    assert calls == []
+    assert [e['event_type'] for e in events(postgres, run)] == ['INVESTIGATED']
+
+
+def test_buyer_copy_is_not_a_seller_duplicate(client, run, upstream, monkeypatch):
+    upstream['messages'][0]['content'] = main.MESSAGE
+    calls = mock_write(monkeypatch)
+    assert approve(client, run).status_code == 200
+    assert len(calls) == 1
+
+
+def test_disabling_preserves_historical_success(client, run, postgres, monkeypatch):
+    calls = mock_write(monkeypatch)
+    assert approve(client, run).status_code == 200
+    with postgres() as conn:
+        before = conn.execute('SELECT * FROM runs WHERE run_id=%s', (run['run_id'],)).fetchone()
+    audit_before = events(postgres, run)
+    monkeypatch.setenv('PAYPAL_WRITES_ENABLED', 'false')
+    history = client.get(f'/api/disputes/{DISPUTE}/history', headers=AUTH).json()
+    assert history['paypal_writes_enabled'] is False
+    assert history['runs'][0]['eligibility'] == 'ALREADY_SENT'
+    assert history['approved_action']['execution_status'] == 'SUCCEEDED'
+    assert approve(client, run).status_code == 403
+    assert len(calls) == 1
+    assert events(postgres, run) == audit_before
+    with postgres() as conn:
+        assert conn.execute('SELECT * FROM runs WHERE run_id=%s', (run['run_id'],)).fetchone() == before
 
 
 def test_success_audit_and_duplicate(client, run, postgres, monkeypatch):

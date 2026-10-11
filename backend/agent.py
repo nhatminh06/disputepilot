@@ -92,10 +92,11 @@ async def _run(
         'Policies are synthetic demos, not evidence of shipment or delivery. '
         'Facts, risk and missing information are authoritative deterministic inputs. '
         'Never change them or claim unsupported payment, shipping, refunds, delivery '
-        'or workflow status. Cite only supporting_fact_ids and policies actually retrieved. '
+        'or workflow status. Cite only the appropriate fact category and policies actually retrieved. '
         'If requires_review is true, return NEEDS_REVIEW. Never authorize actions or '
         'give numerical confidence. Finish with JSON matching this schema: '
-        + json.dumps(gemini.Recommendation.model_json_schema())
+        + json.dumps(gemini.Recommendation.model_json_schema()) + ' '
+        + gemini.CITATION_INSTRUCTIONS
     )
     contents = [types.Content(role='user', parts=[types.Part.from_text(
         text=json.dumps(evidence),

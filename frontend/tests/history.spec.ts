@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { History, SavedRun } from '../lib/contracts';
+import { parseHistory, type History, type SavedRun } from '../lib/contracts';
 import { run } from './fixtures';
 
 function saved(): SavedRun {
@@ -7,7 +7,7 @@ function saved(): SavedRun {
     action_type: 'SEND_MESSAGE', message: 'Synthetic test message. No shipment or delivery confirmation is available.',
     eligibility: 'ELIGIBLE', audit_events: [{ event_type: 'INVESTIGATED', occurred_at: '2026-10-10T10:00:00Z', actor: 'Merchant' }] };
 }
-function history(item = saved()): History { return { dispute_id: 'PP-TEST', runs: [item], approved_action: null }; }
+function history(item = saved()): History { return { dispute_id: 'PP-TEST', runs: [item], approved_action: null, paypal_writes_enabled: true }; }
 async function setup(page: Page, state: History) {
   await page.route('**/api/disputes/PP-TEST/history', route => route.fulfill({ json: state }));
   await page.goto('/disputes/PP-TEST');
@@ -113,4 +113,41 @@ test('historical run without Gemini output does not invent a recommendation', as
   await expect(page.getByRole('button', { name: 'Investigate with AI' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Prepare a new investigation' }).click();
   await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeEnabled();
+});
+
+for (const width of [1440, 390]) {
+  test(`demo mode prevents pending approval at ${width}px`, async ({ page }) => {
+    const state = history(); state.paypal_writes_enabled = false;
+    let approvals = 0;
+    page.on('request', request => { if (request.url().endsWith('/approve')) approvals++; });
+    await page.setViewportSize({ width, height: 900 });
+    await page.route('**/api/disputes/PP-TEST/history', route => route.fulfill({ json: state }));
+    await page.goto('/disputes/PP-TEST');
+    await expect(page.getByText('Demo mode: PayPal actions disabled', { exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Merchant approval' })).not.toContainText('Locally eligible');
+    await expect(page.getByRole('button', { name: 'Review message for approval' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Confirm and send message' })).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Audit trail' })).toContainText('INVESTIGATED');
+    await page.getByRole('button', { name: 'Prepare a new investigation' }).click();
+    await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeEnabled();
+    expect(approvals).toBe(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
+test('demo mode preserves historical message success', async ({ page }) => {
+  const state = history(); state.paypal_writes_enabled = false;
+  state.runs[0].eligibility = 'ALREADY_SENT';
+  state.approved_action = { run_id: 'older-run', execution_status: 'SUCCEEDED', approved_at: null, executed_at: '2026-01-02T00:00:00Z' };
+  await page.route('**/api/disputes/PP-TEST/history', route => route.fulfill({ json: state }));
+  await page.goto('/disputes/PP-TEST');
+  await expect(page.getByText('Demo mode: PayPal actions disabled', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Investigation history' })).toContainText('Message already sent');
+  await expect(page.getByRole('button', { name: 'Review message for approval' })).toHaveCount(0);
+});
+
+test('missing or malformed capability cannot enable execution', () => {
+  for (const capability of [undefined, null, 'true', 1, false]) {
+    expect(parseHistory({ ...history(), paypal_writes_enabled: capability }).paypal_writes_enabled).toBe(false);
+  }
 });

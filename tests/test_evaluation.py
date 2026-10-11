@@ -54,7 +54,9 @@ def test_failure_returns_nonzero(monkeypatch) -> None:
     monkeypatch.setattr(
         run_evaluation.argparse.ArgumentParser,
         "parse_args",
-        lambda self: type("Args", (), {"check": True})(),
+        lambda self: type("Args", (), {
+            "check": True, "live": False, "dry_run": False, "confirm_live": False,
+        })(),
     )
     assert run_evaluation.main() == 1
 

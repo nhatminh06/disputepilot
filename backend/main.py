@@ -4,6 +4,7 @@ import re
 import secrets
 import sys
 from dataclasses import asdict, replace
+from datetime import datetime, timezone
 from typing import Annotated, Any, NoReturn
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -25,6 +26,10 @@ DEFAULT_PAYPAL_BASE_URL = "https://api-m.sandbox.paypal.com"
 REQUEST_TIMEOUT_SECONDS = 20
 
 app = FastAPI(title="DisputePilot")
+
+
+def paypal_writes_enabled() -> bool:
+    return os.getenv('PAYPAL_WRITES_ENABLED') == 'true'
 
 
 class DisputeResponse(BaseModel):
@@ -342,6 +347,9 @@ def history(
         raise HTTPException(503, 'Stored history is unavailable.') from error
     for run in result['runs']:
         run['assessment'] = history_assessment(run['assessment'], dispute_id)
+        if not paypal_writes_enabled() and run['eligibility'] == 'ELIGIBLE':
+            run['eligibility'] = 'INELIGIBLE'
+    result['paypal_writes_enabled'] = paypal_writes_enabled()
     return result
 
 
@@ -401,12 +409,41 @@ def verify_message_allowed(dispute: dict[str, Any], dispute_id: str) -> None:
     raise HTTPException(409, 'PayPal does not currently offer send_message.')
 
 
+def verify_message_history(dispute: dict[str, Any], message: str) -> None:
+    # PayPal message_list has minItems=1, maxItems=1000. A full list may be capped.
+    unavailable = 'PayPal message history cannot be verified. No action was dispatched.'
+    if not isinstance(dispute, dict):
+        raise HTTPException(409, unavailable)
+    messages = dispute.get('messages')
+    links = dispute.get('links')
+    if (not isinstance(messages, list) or not 0 < len(messages) < 1000
+            or not isinstance(links, list)
+            or any(not isinstance(link, dict) or link.get('rel') in ('next', 'previous')
+                   for link in links)):
+        raise HTTPException(409, unavailable)
+    for item in messages:
+        if (not isinstance(item, dict) or item.get('posted_by') not in ('BUYER', 'SELLER', 'ARBITER')
+                or not isinstance(item.get('content'), str) or len(item['content']) > 2000
+                or not isinstance(item.get('time_posted'), str)):
+            raise HTTPException(409, unavailable)
+        try:
+            posted = datetime.fromisoformat(item['time_posted'])
+        except ValueError as error:
+            raise HTTPException(409, unavailable) from error
+        if posted.tzinfo is None or posted > datetime.now(timezone.utc):
+            raise HTTPException(409, unavailable)
+        if item['posted_by'] == 'SELLER' and item['content'] == message:
+            raise HTTPException(409, 'This seller message already exists in PayPal. Do not resend.')
+
+
 @app.post('/disputes/{dispute_id}/approve')
 def approve(
     dispute_id: Annotated[str, Path(pattern=r'^[A-Z0-9-]{1,255}$')],
     request: ApprovalRequest,
     merchant: Annotated[str, Depends(authenticate_merchant)],
 ) -> JSONResponse:
+    if not paypal_writes_enabled():
+        raise HTTPException(403, 'Demo mode: PayPal actions disabled.')
     if request.action_type != 'SEND_MESSAGE':
         raise HTTPException(422, 'Only SEND_MESSAGE is supported.')
     if not request.confirmed:
@@ -423,6 +460,7 @@ def approve(
         current = get_dispute(base_url, token, dispute_id)
     except requests.RequestException as error:
         raise_paypal_error(error)
+    verify_message_history(current, run['message'])
     verify_message_allowed(current, dispute_id)
     try:
         database.reserve(request.run_id, dispute_id, merchant,

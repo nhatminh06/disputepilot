@@ -139,12 +139,44 @@ npm test
 npm run build
 ```
 
-Set `TEST_DATABASE_URL` to a separate disposable database for PostgreSQL integration
-tests. Without it those tests skip. Browser tests use a mock backend on 8001 and a
+Set `TEST_DATABASE_URL` only to a dedicated disposable PostgreSQL container with
+database `disputepilot_approval_test`, role `approval_test`, fresh random credentials,
+tmpfs data storage and a dynamically assigned loopback port. Verify the container
+identity and mounts first, then set `DISPUTEPILOT_TEST_ISOLATED=true` for the test
+process. Fixtures check the connection parameters and actual database identity
+before creating or dropping their UUID-named schemas. Never use a development or
+Compose application database. Remove only the test container after verification;
+do not remove application volumes. Without the test URL those tests skip.
+Browser tests use a mock backend on 8001 and a
 test frontend on 3001, not the running Compose services. They mock action execution.
 An existing Chromium executable can be selected with `PLAYWRIGHT_CHROMIUM_EXECUTABLE`.
 
 ## Troubleshooting and security limits
+
+PayPal action execution defaults to disabled. Only the exact host-development value
+`PAYPAL_WRITES_ENABLED=true` enables the approval path. Missing, false, uppercase,
+whitespace-padded and other values remain disabled. Compose pins the flag to the
+literal `false`, regardless of the host `.env`. Disabled approvals return HTTP 403
+after merchant authentication, before database reservation, audit writes or PayPal
+calls. History exposes only the boolean `paypal_writes_enabled` capability; pending
+runs are not executable in demo mode. Existing successful history stays visible.
+
+When explicitly enabled outside Compose, approval reads current PayPal dispute
+details before reservation and rejects an exact matching SELLER message. It requires
+readable `posted_by`, `content` and timezone-aware `time_posted` fields for every
+message. Missing, malformed, future-dated, paginated or size-capped history blocks
+execution. Empty history also blocks: the current
+[PayPal Disputes schema](https://developer.paypal.com/api/customer-disputes/v1/schema.json)
+defines `message_list` with 1 to 1000 entries, not an authoritative empty-history
+marker. No extra completeness field is assumed. These are application safety
+requirements, not a claim that all schema properties are required by PayPal.
+
+Remote history is an additional defense, not cross-database idempotency. PayPal does
+not provide an atomic history-check-and-send operation or a completeness guarantee.
+Two independent enabled deployments can race, and reads can lag writes. Do not run
+multiple write-enabled deployments for the same merchant. Local locking, the unique
+approved-action index, human confirmation and ambiguous-outcome reservation remain
+required. No automatic retry is performed.
 
 - Port 3000 already in use: stop the native Next.js process, then start Compose.
 - Missing environment configuration: fill the named `.env` variable and rerun
