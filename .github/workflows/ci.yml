@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PAYPAL_WRITES_ENABLED: 'false'
+  GEMINI_AGENT_ENABLED: 'false'
+  PAYPAL_CLIENT_ID: ''
+  PAYPAL_CLIENT_SECRET: ''
+  GEMINI_API_KEY: ''
+  DATABASE_URL: ''
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+        env:
+          POSTGRES_DB: disputepilot_approval_test
+          POSTGRES_USER: approval_test
+          POSTGRES_PASSWORD: disposable-ci-only
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U approval_test -d disputepilot_approval_test"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install -r requirements.txt -c backend/requirements.lock
+      - run: python -m compileall -q backend spike evaluation tests
+      - name: Verify isolated PostgreSQL and run the complete suite
+        env:
+          DISPUTEPILOT_TEST_ISOLATED: 'true'
+          TEST_DATABASE_URL: postgresql://approval_test:disposable-ci-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/disputepilot_approval_test
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import psycopg
+
+          url = os.environ['TEST_DATABASE_URL']
+          params = psycopg.conninfo.conninfo_to_dict(url)
+          assert params['host'] == '127.0.0.1'
+          assert params['dbname'] == 'disputepilot_approval_test'
+          assert params['user'] == 'approval_test'
+          assert not os.environ.get('DATABASE_URL')
+          ports = subprocess.check_output(
+              ['docker', 'port', os.environ['POSTGRES_CONTAINER'], '5432/tcp'],
+              text=True,
+          ).splitlines()
+          assert ports and all(p.rsplit(':', 1)[1] == params['port'] for p in ports)
+          with psycopg.connect(url, connect_timeout=5) as conn:
+              assert conn.execute('SELECT current_database(), current_user').fetchone() == (
+                  'disputepilot_approval_test', 'approval_test',
+              )
+          print('Dedicated CI service mapping and test database identity verified.')
+          PY
+          python -m pytest -q
+      - name: Offline evaluation without report changes
+        run: python -m evaluation.run_evaluation --check
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            requirements.txt
+            backend/requirements.lock
+      - run: npm ci
+      - name: Report all dependency advisories
+        continue-on-error: true
+        run: npm audit --audit-level=high
+      - name: Block high-severity production advisories
+        run: npm audit --omit=dev --audit-level=high
+      - run: npx playwright install --with-deps chromium
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: Chromium tests with the existing mock backend
+        run: npm test
+      - run: npm run build
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install checksum-verified Gitleaks 8.30.1
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz' | sha256sum --check
+          tar -xzf gitleaks.tar.gz gitleaks
+      - name: Scan full Git history with redacted findings
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --log-opts="--all" .'
+
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COMPOSE_POSTGRES_PASSWORD: disposable-config-only
+      DEV_MERCHANT_ID: ci-placeholder
+      DEV_MERCHANT_TOKEN: ci-placeholder-not-a-real-credential
+      PAYPAL_CLIENT_ID: ci-placeholder
+      PAYPAL_CLIENT_SECRET: ci-placeholder
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker compose config --quiet
+      - name: Build images without starting services
+        run: docker compose build backend frontend
