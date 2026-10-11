@@ -20,7 +20,7 @@ test('initial state does not invoke Gemini or fabricate policy citations', async
   const posts: string[] = [];
   page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
   await page.goto('/disputes/PP-TEST');
-  await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Run investigation' })).toBeEnabled();
   await expect(page.getByText('0 retrieved')).toBeVisible();
   await expect(page.getByText('No run in this session')).toBeVisible();
   expect(posts).toEqual([]);
@@ -28,7 +28,7 @@ test('initial state does not invoke Gemini or fabricate policy citations', async
 
 test('investigates once, shows recommendation, exact excerpts and persisted states', async ({ page }) => {
   await page.goto('/disputes/PP-TEST');
-  await page.getByRole('button', { name: 'Investigate with AI' }).click();
+  await page.getByRole('button', { name: 'Run investigation' }).click();
   await expect(page.getByRole('heading', { name: 'Needs review', exact: true })).toBeVisible();
   await expect(page.getByText(run.assessment.recommendation!.response.summary)).toBeVisible();
   await expect(page.locator('blockquote')).toHaveText(run.assessment.retrieved_policies[0].excerpt);
@@ -37,7 +37,7 @@ test('investigates once, shows recommendation, exact excerpts and persisted stat
   await expect(page.getByText(run.run_id)).toBeVisible();
   await expect(page.getByText('PENDING', { exact: true })).toBeVisible();
   await expect(page.getByText('NOT_STARTED', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Investigate with AI/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Run investigation/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /approve|refund|send message/i })).toHaveCount(0);
 });
 
@@ -49,7 +49,7 @@ test('blocks duplicate submissions while an investigation is pending', async ({ 
     calls++; await pending; await route.fulfill({ json: run, status: 201 });
   });
   await page.goto('/disputes/PP-TEST');
-  await page.getByRole('button', { name: 'Investigate with AI' }).click();
+  await page.getByRole('button', { name: 'Run investigation' }).click();
   await expect(page.getByRole('button', { name: 'Investigating…' })).toBeDisabled();
   await page.getByRole('button', { name: 'Investigating…' }).evaluate(button => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -66,7 +66,7 @@ test('shows Gemini fallback and no-policy state without fabricating an explanati
   fallback.assessment.recommendation!.response.policy_refs = [];
   await page.route('**/api/disputes/PP-TEST/investigate', route => route.fulfill({ json: fallback, status: 201 }));
   await page.goto('/disputes/PP-TEST');
-  await page.getByRole('button', { name: 'Investigate with AI' }).click();
+  await page.getByRole('button', { name: 'Run investigation' }).click();
   await expect(page.getByText(/Safe fallback: Api error/)).toBeVisible();
   await expect(page.getByText('No relevant policies retrieved')).toBeVisible();
 });
@@ -83,9 +83,9 @@ test('an ambiguous investigation error cannot be automatically resubmitted', asy
     calls++; return route.fulfill({ status: 502, json: { error: 'Outcome unknown. Check the backend.' } });
   });
   await page.goto('/disputes/PP-TEST');
-  await page.getByRole('button', { name: 'Investigate with AI' }).click();
+  await page.getByRole('button', { name: 'Run investigation' }).click();
   await expect(page.getByRole('main').getByRole('alert')).toContainText('Outcome unknown');
-  await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Run investigation' })).toBeDisabled();
   expect(calls).toBe(1);
 });
 
@@ -102,7 +102,7 @@ test('network errors and empty evidence have honest states', async ({ page }) =>
 test('mobile stacks panels and supports accessible navigation without overflow', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/disputes/PP-TEST');
-  await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run investigation' })).toBeVisible();
   const evidence = await page.locator('.evidence-card').boundingBox();
   const ai = await page.locator('.ai-card').boundingBox();
   expect(ai!.y).toBeGreaterThan(evidence!.y + evidence!.height);
@@ -116,20 +116,20 @@ test('mobile stacks panels and supports accessible navigation without overflow',
 test('desktop uses two columns and keyboard focus is visible', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/disputes/PP-TEST');
-  await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run investigation' })).toBeVisible();
   const evidence = await page.locator('.evidence-card').boundingBox();
   const ai = await page.locator('.ai-card').boundingBox();
   expect(Math.abs(evidence!.y - ai!.y)).toBeLessThan(2);
   expect(ai!.x).toBeGreaterThan(evidence!.x + evidence!.width);
-  await page.getByRole('button', { name: 'Investigate with AI' }).focus();
-  expect(await page.getByRole('button', { name: 'Investigate with AI' }).evaluate(el => getComputedStyle(el).outlineStyle)).toBe('solid');
+  await page.getByRole('button', { name: 'Run investigation' }).focus();
+  expect(await page.getByRole('button', { name: 'Run investigation' }).evaluate(el => getComputedStyle(el).outlineStyle)).toBe('solid');
 });
 
 test('browser sends no merchant credential and renders no private backend fields', async ({ page }) => {
   const authorization: string[] = [];
   page.on('request', request => { if (request.headers().authorization) authorization.push(request.headers().authorization); });
   await page.goto('/disputes/PP-TEST');
-  await page.getByRole('button', { name: 'Investigate with AI' }).click();
+  await page.getByRole('button', { name: 'Run investigation' }).click();
   await expect(page.getByText(run.run_id)).toBeVisible();
   expect(authorization).toEqual([]);
   const content = await page.content();

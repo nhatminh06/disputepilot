@@ -42,7 +42,7 @@ for (const width of [1440, 390]) {
     ];
     await page.route('**/api/disputes/PP-TEST/investigate', route => route.fulfill({ json: value, status: 201 }));
     await page.goto('/disputes/PP-TEST');
-    await page.getByRole('button', { name: 'Investigate with AI' }).click();
+    await page.getByRole('button', { name: 'Run investigation' }).click();
     await expect(page.getByRole('heading', { name: 'Verified evidence requiring attention' })).toBeVisible();
     await expect(page.locator('.citation-list.adverse-label a')).toHaveCount(2);
     await expect(page.locator('.citation-list.adverse-label a').first()).toHaveAttribute('href', '#fact-shipping_address_matches');

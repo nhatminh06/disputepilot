@@ -109,10 +109,10 @@ test('mobile dialog is contained and traps keyboard focus', async ({ page }) => 
 test('historical run without Gemini output does not invent a recommendation', async ({ page }) => {
   const state = history(); delete state.runs[0].assessment.recommendation;
   await setup(page, state);
-  await expect(page.getByRole('region', { name: 'AI Investigation' })).toContainText('No recommendation was stored');
-  await expect(page.getByRole('button', { name: 'Investigate with AI' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Investigation', exact: true })).toContainText('No recommendation was stored');
+  await expect(page.getByRole('button', { name: 'Run investigation' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Prepare a new investigation' }).click();
-  await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Run investigation' })).toBeEnabled();
 });
 
 for (const width of [1440, 390]) {
@@ -129,7 +129,7 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('button', { name: 'Confirm and send message' })).toHaveCount(0);
     await expect(page.getByRole('region', { name: 'Audit trail' })).toContainText('INVESTIGATED');
     await page.getByRole('button', { name: 'Prepare a new investigation' }).click();
-    await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Run investigation' })).toBeEnabled();
     expect(approvals).toBe(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });

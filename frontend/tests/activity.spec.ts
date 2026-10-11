@@ -17,7 +17,7 @@ function agentRun(): Run {
 async function show(page: Page, result: Run) {
   await page.route('**/api/disputes/PP-TEST/investigate', route => route.fulfill({ status: 201, json: result }));
   await page.goto('/disputes/PP-TEST');
-  await page.getByRole('button', { name: 'Investigate with AI' }).click();
+  await page.getByRole('button', { name: 'Run investigation' }).click();
   await expect(page.getByText(result.run_id)).toBeVisible();
   return page.getByRole('region', { name: 'Agent activity' });
 }

@@ -21,5 +21,5 @@ test('clean database shows empty history and never offers approval', async ({ pa
   await page.goto('/disputes/PP-TEST');
   await expect(page.getByRole('region', { name: 'Investigation history' })).toContainText('No saved investigations');
   await expect(page.getByRole('button', { name: 'Review message for approval' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Investigate with AI' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Run investigation' })).toBeEnabled();
 });

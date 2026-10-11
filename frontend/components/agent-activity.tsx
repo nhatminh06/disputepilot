@@ -1,4 +1,4 @@
-import { Activity, CircleCheck, CircleHelp, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { CircleCheck, CircleHelp, TriangleAlert } from 'lucide-react';
 import type { Run } from '@/lib/contracts';
 
 const names: Record<string, string> = {
@@ -23,13 +23,13 @@ export default function AgentActivity({ run, busy }: { run: Run | null; busy: bo
   const tokens = usage?.length && usage.every(item => item.total_token_count !== undefined)
     ? usage.reduce((sum, item) => sum + item.total_token_count!, 0) : undefined;
   return <section className="card agent-activity" aria-labelledby="activity-title">
-    <div className="card-heading"><div className="heading-with-icon"><Activity size={18} /><h2 id="activity-title">Agent activity</h2></div><span className="badge badge-blue">Read-only tools</span></div>
-    {recommendation && <dl className="activity-metrics">
+    <div className="card-heading"><h2 id="activity-title">Agent activity</h2><span className="small muted">Read-only tools</span></div>
+    {recommendation && <details className="technical-details"><summary>Model and usage</summary><dl className="activity-metrics">
       <div><dt>Model</dt><dd>{recommendation.model}</dd></div>
       {recommendation.attempts !== undefined && <div><dt>Model requests</dt><dd>{recommendation.attempts}</dd></div>}
       {trace !== undefined && <div><dt>Recorded tool calls</dt><dd>{trace.length}</dd></div>}
       {tokens !== undefined && <div><dt>Total tokens</dt><dd>{tokens.toLocaleString('en-US')}</dd></div>}
-    </dl>}
+    </dl></details>}
     {recommendation?.fallback && <p className="activity-warning"><TriangleAlert size={16} /><span>Safe fallback returned ({status}). The investigation did not produce a validated model recommendation. Recorded steps below are not proof of a successful investigation.</span></p>}
     {trace?.length ? <ol className="activity-timeline">{trace.map((entry, index) => {
       const Icon = entry.outcome === 'AVAILABLE' ? CircleCheck : entry.outcome === 'UNAVAILABLE' ? CircleHelp : TriangleAlert;
@@ -40,6 +40,6 @@ export default function AgentActivity({ run, busy }: { run: Run | null; busy: bo
         </div>
       </li>;
     })}</ol> : <p className="empty-inline">{busy ? 'Investigation in progress. Tool activity will appear when the backend returns its record.' : run ? 'No tool-calling trace was returned. The recommendation flow can run without agent tools; no tool executions are shown.' : 'Run an investigation to see any tool activity returned by the backend.'}</p>}
-    <div className="card-footnote"><ShieldCheck size={14} /><span>Backend-reported activity only. Tool availability is not proof of fulfillment. Merchant approval remains separate.</span></div>
+    <div className="card-footnote"><span>Backend-reported activity only. Tool availability is not proof of fulfillment. Merchant approval remains separate.</span></div>
   </section>;
 }

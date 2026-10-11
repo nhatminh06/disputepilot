@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { History as HistoryIcon, LockKeyhole } from 'lucide-react';
 import { parseHistory, type History, type SavedRun } from '@/lib/contracts';
 import ApprovalDialog from './approval-dialog';
 import AuditTimeline, { timestamp } from './audit-timeline';
@@ -86,8 +85,8 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
   }
 
   return <>
-    <section className="card history-section" aria-labelledby="history-title"><div className="card-heading"><div className="heading-with-icon"><HistoryIcon size={18} /><h2 id="history-title">Investigation history</h2></div><button className="button secondary" disabled={loading || sending} onClick={() => { setLoading(true); void load(selected); }}>Refresh history</button></div>
-      <p className="empty-inline">Up to 25 newest saved investigations. Selecting a run reads its saved evidence and recommendation, without calling Gemini.</p>
+    <section className="card history-section" aria-labelledby="history-title"><div className="card-heading"><h2 id="history-title">Investigation history</h2><button className="button secondary" disabled={loading || sending} onClick={() => { setLoading(true); void load(selected); }}>Refresh history</button></div>
+      <p className="empty-inline">Latest 25 saved runs. Select a row to review its evidence. No new investigation is started.</p>
       {error && <p className="history-warning" role="alert">{error}</p>}
       {loading && <p className="empty-inline" role="status">Loading stored history…</p>}
       {history?.approved_action && <p className="history-warning">{history.approved_action.execution_status === 'SUCCEEDED' ? 'Message already sent for this dispute' : history.approved_action.execution_status === 'REQUIRES_RECONCILIATION' ? eligibilityText.REQUIRES_RECONCILIATION : eligibilityText.ALREADY_APPROVED}<br />Reserved run: {history.approved_action.run_id}<br />{timestamp(history.approved_action.executed_at ?? history.approved_action.approved_at)}</p>}
@@ -97,8 +96,8 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
       {!loading && history?.runs.length === 0 && <p className="empty-inline">No saved investigations.</p>}
       {!!history?.runs.length && <div className="history-controls"><button className="button secondary" disabled={sending} onClick={() => { setSelected(null); onNew(); }}>Prepare a new investigation</button></div>}
     </section>
-    <AuditTimeline run={run} />
-    <section className="card history-section" aria-labelledby="merchant-title"><div className="card-heading"><div className="heading-with-icon"><LockKeyhole size={18} /><h2 id="merchant-title">Merchant approval</h2></div><span className="badge badge-blue">SEND_MESSAGE only</span></div>
+    <div className="record-columns"><AuditTimeline run={run} />
+    <section className="card history-section" aria-labelledby="merchant-title"><div className="card-heading"><h2 id="merchant-title">Merchant approval</h2><span className="small muted">SEND_MESSAGE only</span></div>
       <div className="approval-content"><p>This sends a real PayPal Sandbox message. It is not a refund, contest submission, evidence submission, or automatic resolution.</p>
         {history && !history.paypal_writes_enabled && <p className="history-warning" role="status">Demo mode: PayPal actions disabled</p>}
         {run ? <><p className="approval-state">{!history?.paypal_writes_enabled && run.eligibility === 'ELIGIBLE' ? 'This pending run cannot be executed in demo mode.' : eligibilityText[run.eligibility]}</p><p>Stored approval: <strong>{run.approval_state}</strong> · Execution: <strong>{run.execution_status}</strong></p>
@@ -110,6 +109,7 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
         {error && <p>Approval is blocked until authoritative history is available.</p>}
       </div>
     </section>
+    </div>
     {dialog && eligible && run && <ApprovalDialog key={run.run_id} run={run} onClose={() => setDialog(false)} onConfirm={() => void approve()} />}
   </>;
 }
