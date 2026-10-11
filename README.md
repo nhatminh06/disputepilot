@@ -1,4 +1,5 @@
 # DisputePilot
+License: MIT. See LICENSE.
 
 Local-only PayPal Sandbox dispute workspace. Deterministic rules supply evidence
 and risk; Gemini recommendations are advisory. Only explicit merchant approval can
