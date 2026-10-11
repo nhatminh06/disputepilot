@@ -2,19 +2,19 @@ import { ArrowRight, Check, CircleHelp, LoaderCircle, TriangleAlert } from 'luci
 import type { Run } from '@/lib/contracts';
 import { factLabel, readable } from '@/lib/display';
 
-export default function InvestigationCard({ run, busy, error, disabled, onInvestigate }: {
-  run: Run | null; busy: boolean; error: string | null; disabled: boolean; onInvestigate: () => void;
+export default function InvestigationCard({ run, busy, error, disabled, onInvestigate, publicDemo = false }: {
+  run: Run | null; busy: boolean; error: string | null; disabled: boolean; onInvestigate: () => void; publicDemo?: boolean;
 }) {
   const recommendation = run?.assessment.recommendation;
   const response = recommendation?.response;
   return <section className="card ai-card" id="investigation" aria-labelledby="ai-title" aria-busy={busy}>
     <div className="card-heading"><h2 id="ai-title">Investigation</h2><span className="small muted">Advisory</span></div>
     {response && recommendation ? <div className="recommendation" aria-live="polite">
-      <div className="eyebrow">Recommendation</div>
+      <div className="eyebrow">{publicDemo ? 'Example recommendation' : 'Recommendation'}</div>
       <div className="recommendation-title"><h3>{readable(response.recommendation)}</h3></div>
       {recommendation.fallback && <div className="inline-warning" role="status"><TriangleAlert size={17} /><p>Safe fallback: {readable(recommendation.api_status)}. This is an application fallback, not a validated model explanation.</p></div>}
       <p className="explanation">{response.summary}</p>
-      <p className="small muted">{recommendation.fallback ? 'Application fallback' : 'AI-generated explanation'} · {recommendation.model}</p>
+      <p className="small muted">{publicDemo ? 'Scripted example, not a live Gemini response' : `${recommendation.fallback ? 'Application fallback' : 'AI-generated explanation'} · ${recommendation.model}`}</p>
       <h4>Supporting evidence</h4>
       {response.supporting_fact_ids.length ? <div className="citation-list">{response.supporting_fact_ids.map(id => <a key={id} href={`#fact-${id}`}><Check size={13} />{factLabel(id)}</a>)}</div> : <p className="small muted">No verified supporting facts cited.</p>}
       <h4>Verified evidence requiring attention</h4>
@@ -22,7 +22,7 @@ export default function InvestigationCard({ run, busy, error, disabled, onInvest
       <h4>Missing information</h4>
       {response.missing_information.length ? <ul className="missing-list">{response.missing_information.map(id => <li key={id}><CircleHelp size={14} />{factLabel(id)}</li>)}</ul> : <p className="small muted">No missing information reported by the evidence engine.</p>}
       {response.policy_refs.length > 0 && <><h4>Policy citations</h4><div className="citation-list">{response.policy_refs.map(ref => <a key={ref} href={`#policy-${ref.replace('#', '-')}`}>{ref}</a>)}</div></>}
-    </div> : run ? <p className="empty-inline">No recommendation was stored for this investigation. Select another saved run or prepare a new investigation below.</p> : <div className="ai-empty">
+    </div> : publicDemo ? <p className="empty-inline">Example recommendation unavailable. Live investigation is disabled.</p> : run ? <p className="empty-inline">No recommendation was stored for this investigation. Select another saved run or prepare a new investigation below.</p> : <div className="ai-empty">
       <p>Review the available evidence and merchant policies to generate a recommendation.</p>
       <button className="button primary" onClick={onInvestigate} disabled={disabled || busy || !!error}>
         {busy && <LoaderCircle size={17} className="spin" />}

@@ -15,7 +15,7 @@ const explanations: Record<string, string> = {
   UNKNOWN: 'No recognized outcome was returned. Review is required.',
 };
 
-export default function AgentActivity({ run, busy }: { run: Run | null; busy: boolean }) {
+export default function AgentActivity({ run, busy, publicDemo = false }: { run: Run | null; busy: boolean; publicDemo?: boolean }) {
   const trace = run?.assessment.agent_trace;
   const recommendation = run?.assessment.recommendation;
   const status = recommendation && ['OK', 'TOOL_LIMIT', 'ITERATION_LIMIT', 'TIMEOUT', 'API_ERROR', 'TRANSPORT_ERROR', 'VALIDATION_FAILED', 'MISSING_CREDENTIALS'].includes(recommendation.api_status) ? recommendation.api_status : 'UNKNOWN';
@@ -24,6 +24,7 @@ export default function AgentActivity({ run, busy }: { run: Run | null; busy: bo
     ? usage.reduce((sum, item) => sum + item.total_token_count!, 0) : undefined;
   return <section className="card agent-activity" aria-labelledby="activity-title">
     <div className="card-heading"><h2 id="activity-title">Agent activity</h2><span className="small muted">Read-only tools</span></div>
+    {publicDemo && <p className="empty-inline">Illustrative tool trace. These steps did not execute; outcomes belong only to this synthetic example.</p>}
     {recommendation && <details className="technical-details"><summary>Model and usage</summary><dl className="activity-metrics">
       <div><dt>Model</dt><dd>{recommendation.model}</dd></div>
       {recommendation.attempts !== undefined && <div><dt>Model requests</dt><dd>{recommendation.attempts}</dd></div>}
@@ -40,6 +41,6 @@ export default function AgentActivity({ run, busy }: { run: Run | null; busy: bo
         </div>
       </li>;
     })}</ol> : <p className="empty-inline">{busy ? 'Investigation in progress. Tool activity will appear when the backend returns its record.' : run ? 'No tool-calling trace was returned. The recommendation flow can run without agent tools; no tool executions are shown.' : 'Run an investigation to see any tool activity returned by the backend.'}</p>}
-    <div className="card-footnote"><span>Backend-reported activity only. Tool availability is not proof of fulfillment. Merchant approval remains separate.</span></div>
+    <div className="card-footnote"><span>{publicDemo ? 'Synthetic activity only. No tools or external services were called.' : 'Backend-reported activity only. Tool availability is not proof of fulfillment. Merchant approval remains separate.'}</span></div>
   </section>;
 }

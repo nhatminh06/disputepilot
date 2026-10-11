@@ -15,6 +15,6 @@ test('root opens the existing case page without a write', async ({ page }) => {
 test('invalid identifiers stay on the entry page and mobile layout fits', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/?dispute_id=../../approve');
-  await expect(page.getByRole('alert')).toContainText('Enter a valid dispute ID');
+  await expect(page.getByRole('main').getByRole('alert')).toContainText('Enter a valid dispute ID');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

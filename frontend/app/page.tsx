@@ -1,9 +1,11 @@
 import { redirect } from 'next/navigation';
 import { ShieldCheck } from 'lucide-react';
+import { DEMO_ID, publicDemoEnabled } from '@/lib/public-demo';
 
 export default async function Home({ searchParams }: {
   searchParams: Promise<{ dispute_id?: string | string[] }>;
 }) {
+  if (publicDemoEnabled()) redirect(`/disputes/${DEMO_ID}`);
   const { dispute_id: id } = await searchParams;
   if (typeof id === 'string' && /^[A-Z0-9-]{1,255}$/.test(id.trim())) {
     redirect(`/disputes/${encodeURIComponent(id.trim())}`);

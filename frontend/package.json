@@ -9,7 +9,7 @@
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "playwright test"
+    "test": "playwright test && playwright test --config=playwright.public.config.ts"
   },
   "dependencies": {
     "@fontsource/geist": "^5.2.8",

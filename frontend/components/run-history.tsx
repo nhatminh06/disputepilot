@@ -23,8 +23,8 @@ async function readHistory(id: string, signal?: AbortSignal): Promise<History> {
   return data;
 }
 
-export default function RunHistory({ id, newRunId, onSelect, onNew }: {
-  id: string; newRunId: string | null; onSelect: (run: SavedRun) => void; onNew: () => void;
+export default function RunHistory({ id, newRunId, onSelect, onNew, publicDemo = false }: {
+  id: string; newRunId: string | null; onSelect: (run: SavedRun) => void; onNew: () => void; publicDemo?: boolean;
 }) {
   const [history, setHistory] = useState<History | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -55,7 +55,7 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
     return () => controller.abort();
   }, [load, newRunId]);
   const run = history?.runs.find(item => item.run_id === selected) ?? null;
-  const eligible = history?.paypal_writes_enabled === true && !!run && run.eligibility === 'ELIGIBLE' && !history?.approved_action &&
+  const eligible = !publicDemo && history?.paypal_writes_enabled === true && !!run && run.eligibility === 'ELIGIBLE' && !history?.approved_action &&
     run.action_type === 'SEND_MESSAGE' && run.approval_state === 'PENDING' && run.execution_status === 'NOT_STARTED' &&
     !error && !loading && !sending && !attempted;
 
@@ -86,7 +86,7 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
 
   return <>
     <section className="card history-section" aria-labelledby="history-title"><div className="card-heading"><h2 id="history-title">Investigation history</h2><button className="button secondary" disabled={loading || sending} onClick={() => { setLoading(true); void load(selected); }}>Refresh history</button></div>
-      <p className="empty-inline">Latest 25 saved runs. Select a row to review its evidence. No new investigation is started.</p>
+      <p className="empty-inline">{publicDemo ? 'Synthetic example history with illustrative dates. Select a row to inspect it; nothing is executed or persisted.' : 'Latest 25 saved runs. Select a row to review its evidence. No new investigation is started.'}</p>
       {error && <p className="history-warning" role="alert">{error}</p>}
       {loading && <p className="empty-inline" role="status">Loading stored history…</p>}
       {history?.approved_action && <p className="history-warning">{history.approved_action.execution_status === 'SUCCEEDED' ? 'Message already sent for this dispute' : history.approved_action.execution_status === 'REQUIRES_RECONCILIATION' ? eligibilityText.REQUIRES_RECONCILIATION : eligibilityText.ALREADY_APPROVED}<br />Reserved run: {history.approved_action.run_id}<br />{timestamp(history.approved_action.executed_at ?? history.approved_action.approved_at)}</p>}
@@ -94,11 +94,11 @@ export default function RunHistory({ id, newRunId, onSelect, onNew }: {
         <span><strong>{timestamp(item.created_at)}</strong><code>{item.run_id}</code></span><span>{item.assessment.recommendation?.response.recommendation ?? 'No recommendation'}<small>Risk: {item.assessment.risk} · {item.investigation_status}</small></span><span className="history-badges"><span className="badge">{item.approval_state}</span><span className="badge">{item.execution_status}</span></span>
       </button>)}</div>
       {!loading && history?.runs.length === 0 && <p className="empty-inline">No saved investigations.</p>}
-      {!!history?.runs.length && <div className="history-controls"><button className="button secondary" disabled={sending} onClick={() => { setSelected(null); onNew(); }}>Prepare a new investigation</button></div>}
+      {!publicDemo && !!history?.runs.length && <div className="history-controls"><button className="button secondary" disabled={sending} onClick={() => { setSelected(null); onNew(); }}>Prepare a new investigation</button></div>}
     </section>
-    <div className="record-columns"><AuditTimeline run={run} />
+    <div className="record-columns"><AuditTimeline run={run} publicDemo={publicDemo} />
     <section className="card history-section" aria-labelledby="merchant-title"><div className="card-heading"><h2 id="merchant-title">Merchant approval</h2><span className="small muted">SEND_MESSAGE only</span></div>
-      <div className="approval-content"><p>This sends a real PayPal Sandbox message. It is not a refund, contest submission, evidence submission, or automatic resolution.</p>
+      <div className="approval-content"><p>{publicDemo ? 'Approval is unavailable in this public demo. No PayPal message or financial action can be executed.' : 'This sends a real PayPal Sandbox message. It is not a refund, contest submission, evidence submission, or automatic resolution.'}</p>
         {history && !history.paypal_writes_enabled && <p className="history-warning" role="status">Demo mode: PayPal actions disabled</p>}
         {run ? <><p className="approval-state">{!history?.paypal_writes_enabled && run.eligibility === 'ELIGIBLE' ? 'This pending run cannot be executed in demo mode.' : eligibilityText[run.eligibility]}</p><p>Stored approval: <strong>{run.approval_state}</strong> · Execution: <strong>{run.execution_status}</strong></p>
           {run.execution_status === 'SUCCEEDED' && <p>Successful execution recorded: {timestamp(run.executed_at)}</p>}

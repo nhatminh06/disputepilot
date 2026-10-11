@@ -5,6 +5,50 @@ Local-only PayPal Sandbox dispute workspace. Deterministic rules supply evidence
 and risk; Gemini recommendations are advisory. Only explicit merchant approval can
 reach the separate SEND_MESSAGE execution function.
 
+## Public read-only demo (Vercel Hobby)
+
+The optional public demo serves one synthetic case, `PP-DEMO-001`, entirely from
+`frontend/lib/public-demo.ts`. Recommendations, tool traces, audit events, and dates
+are labeled examples, not fresh model or PayPal results. All mutation requests are
+rejected. Missing examples fail closed without an upstream lookup.
+
+For a personal, non-commercial demo within Vercel Hobby limits, use these project
+settings when deployment is authorized:
+
+| Setting | Value |
+| --- | --- |
+| Framework preset | Next.js |
+| Root directory | `frontend` |
+| Include files outside root directory | Disabled |
+| Node.js version | `24.x` |
+| Install command | `npm ci` |
+| Build command | `npm run build` |
+| Output directory | Framework default, no override |
+| Environment variable | `DISPUTEPILOT_PUBLIC_DEMO=true` for Production, Preview, and Development |
+
+Do not add merchant, PayPal, Gemini, or database credentials to this Vercel project.
+Do not upload `.env` files, configure an upstream backend, or use a `NEXT_PUBLIC_`
+prefix for the mode flag. The flag must be set before the build and remain set at
+runtime. Public mode skips the repository-root `.env` loader and does not import
+the authenticated upstream proxy. The root page opens the example automatically.
+
+For a local preview from `frontend/`:
+
+```sh
+env DISPUTEPILOT_PUBLIC_DEMO=true npm run dev
+```
+
+`npm test` runs the existing mock-backend suite followed by a separate public-demo
+suite with no backend or credentials. Public mode is off unless the flag is exactly
+`true`. Leave it unset for the existing local or Docker Compose application;
+Compose configuration, authentication, and approval protections are unchanged.
+
+Deployment is manual. Creating a Vercel project or connecting Git can trigger a
+deployment, so do so only after review. Hobby limits and non-commercial restrictions
+apply: [Hobby plan](https://vercel.com/docs/plans/hobby),
+[build settings](https://vercel.com/docs/builds/configure-a-build),
+[Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions).
+
 ## Prerequisites
 
 - Docker Engine and Docker Compose with health-check dependency support.

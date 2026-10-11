@@ -23,7 +23,7 @@ async function getData(path: string, signal: AbortSignal, investigate = false): 
   return body;
 }
 
-export default function DisputePage({ id }: { id: string }) {
+export default function DisputePage({ id, publicDemo = false }: { id: string; publicDemo?: boolean }) {
   const [dispute, setDispute] = useState<Dispute | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [run, setRun] = useState<Run | null>(null);
@@ -55,7 +55,7 @@ export default function DisputePage({ id }: { id: string }) {
   }, [id, refresh]);
 
   async function investigate() {
-    if (submitting.current || run || investigationError) return;
+    if (publicDemo || submitting.current || run || investigationError) return;
     submitting.current = true; setBusy(true);
     try {
       const result = parseRun(await getData(`/api/disputes/${id}/investigate`, AbortSignal.timeout(125_000), true));
@@ -81,12 +81,13 @@ export default function DisputePage({ id }: { id: string }) {
     <aside className={`sidebar ${menu ? 'sidebar-open' : ''}`} aria-label="Workspace navigation">
       <div className="brand"><span>DisputePilot<span className="brand-period">.</span></span><button className="icon-button mobile-close" aria-label="Close navigation" onClick={() => setMenu(false)}><X size={19} /></button></div>
       <nav><a className="nav-current" href="#main" aria-current="page" onClick={() => setMenu(false)}><FolderOpen size={18} /><span>Disputes</span><ChevronRight size={15} /></a></nav>
-      <div className="sidebar-bottom"><div className="sandbox-label"><span className="environment-dot" /><span>Sandbox environment</span></div><p>Local development</p></div>
+      <div className="sidebar-bottom"><div className="sandbox-label"><span className="environment-dot" /><span>{publicDemo ? 'Public demo' : 'Sandbox environment'}</span></div><p>{publicDemo ? 'Read-only example' : 'Local development'}</p></div>
     </aside>
     {menu && <button className="nav-backdrop" aria-label="Dismiss navigation" onClick={() => setMenu(false)} />}
     <div className="workspace">
-      <header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Open navigation" aria-expanded={menu} onClick={() => setMenu(true)}><Menu size={20} /></button><span>Disputes</span><ChevronRight size={14} /><span className="breadcrumb-current">Case details</span></div><span className="topbar-environment">PayPal Sandbox</span></header>
+      <header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Open navigation" aria-expanded={menu} onClick={() => setMenu(true)}><Menu size={20} /></button><span>Disputes</span><ChevronRight size={14} /><span className="breadcrumb-current">Case details</span></div><span className="topbar-environment">{publicDemo ? 'Synthetic demonstration' : 'PayPal Sandbox'}</span></header>
       <main id="main" className="content">
+        {publicDemo && <aside className="public-demo-notice" aria-label="Public demo notice"><strong>Read-only public demo</strong><p>All records, dates, recommendations, and tool activity shown here are synthetic examples. No live PayPal, Gemini, or database requests are made. Investigations and approvals are disabled.</p></aside>}
         <div className="page-heading"><div><h1>{dispute ? reasonLabel(dispute.reason) : 'Dispute details'}</h1><div className="case-id"><code>{id}</code><button className="icon-button copy-button" onClick={copyId} aria-label={copied ? 'Dispute ID copied' : 'Copy dispute ID'}>{copied ? <Check size={14} /> : <Copy size={14} />}</button></div></div><button className="button secondary refresh-button" disabled={loading || busy || !!run} onClick={reload}><RefreshCw size={15} className={loading ? 'spin' : ''} />Refresh data</button></div>
         {loading ? <div className="loading-state" role="status" aria-label="Loading dispute"><div className="skeleton skeleton-summary" /><div className="two-columns"><div className="skeleton skeleton-panel" /><div className="skeleton skeleton-panel" /></div><span className="sr-only">Loading dispute and evidence from PayPal Sandbox.</span></div> : error ? <section className="card error-state" role="alert"><TriangleAlert size={28} /><h2>Unable to load this dispute</h2><p>{error}</p><button className="button secondary" onClick={reload}>Retry read-only lookup</button></section> : dispute && assessment ? <>
           <section className="case-summary" aria-label="PayPal case summary">
@@ -96,13 +97,13 @@ export default function DisputePage({ id }: { id: string }) {
             <div className="summary-field deadline-field"><span className="field-label">Seller response deadline</span><strong>{deadline(dispute.response_deadline)}</strong></div>
           </section>
           <nav className="section-nav" aria-label="Case sections"><a href="#evidence">Evidence</a><a href="#policies">Policy references</a><a href="#run-details">Investigation details</a></nav>
-          <div className="two-columns"><EvidenceCard assessment={assessment} /><InvestigationCard run={run} busy={busy} error={investigationError} disabled={loading} onInvestigate={investigate} /></div>
+          <div className="two-columns"><EvidenceCard assessment={assessment} /><InvestigationCard run={run} busy={busy} error={investigationError} disabled={loading} onInvestigate={investigate} publicDemo={publicDemo} /></div>
           <PoliciesCard policies={assessment.retrieved_policies} investigated={!!run} />
-          <AgentActivity run={run} busy={busy} />
-          <section className="card investigation-details" id="run-details" aria-labelledby="details-title"><div className="card-heading"><h2 id="details-title">Investigation details</h2><span className="small muted">{run ? 'Persisted backend record' : 'No run in this session'}</span></div>
+          <AgentActivity run={run} busy={busy} publicDemo={publicDemo} />
+          <section className="card investigation-details" id="run-details" aria-labelledby="details-title"><div className="card-heading"><h2 id="details-title">Investigation details</h2><span className="small muted">{publicDemo ? 'Synthetic example record' : run ? 'Persisted backend record' : 'No run in this session'}</span></div>
             {run ? <dl className="run-details"><div><dt>Run ID</dt><dd className="mono">{run.run_id}</dd></div><div><dt>Investigation status</dt><dd>{readable(run.investigation_status)}</dd></div><div><dt>Recommendation</dt><dd>{run.assessment.recommendation?.response.recommendation ?? 'Not available'}</dd></div><div><dt>Approval</dt><dd>{run.approval_state}</dd></div><div><dt>Execution</dt><dd>{run.execution_status}</dd></div></dl> : <p className="empty-inline">Run an investigation or select a saved run from history to inspect its details.</p>}
           </section>
-          <RunHistory id={id} newRunId={newRunId} onSelect={saved => { setRun(saved); setAssessment(saved.assessment); }} onNew={() => { setRun(null); setAssessment(liveAssessment.current); submitting.current = false; }} />
+          <RunHistory id={id} newRunId={newRunId} onSelect={saved => { setRun(saved); setAssessment(saved.assessment); }} onNew={() => { setRun(null); setAssessment(liveAssessment.current); submitting.current = false; }} publicDemo={publicDemo} />
         </> : <p className="empty-inline">No dispute data returned.</p>}
       </main>
     </div>

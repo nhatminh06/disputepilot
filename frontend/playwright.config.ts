@@ -7,6 +7,6 @@ export default defineConfig({
   webServer: [
     { command: 'node --experimental-strip-types tests/mock-backend.ts', url: 'http://127.0.0.1:8001/health', reuseExistingServer: false },
     { command: 'npm run dev -- --port 3001', url: 'http://127.0.0.1:3001/disputes/PP-TEST', reuseExistingServer: false,
-      env: { DEV_MERCHANT_TOKEN: 'test-only-merchant-token-not-a-secret-12345', DISPUTEPILOT_API_URL: 'http://127.0.0.1:8001' } },
+      env: { DISPUTEPILOT_PUBLIC_DEMO: 'false', DEV_MERCHANT_TOKEN: 'test-only-merchant-token-not-a-secret-12345', DISPUTEPILOT_API_URL: 'http://127.0.0.1:8001' } },
   ],
 });

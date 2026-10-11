@@ -39,6 +39,9 @@ code,.mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-si
 .breadcrumb-current { color:var(--ink); }
 .topbar-environment { color:var(--muted); font-size:12px; white-space:nowrap; }
 .content { max-width:1440px; margin:auto; padding:38px 40px 64px; }
+.public-demo-notice { border-left:3px solid var(--blue); background:#eef1fa; padding:14px 18px; margin-bottom:28px; font-size:13px; }
+.public-demo-notice strong { font-weight:600; }
+.public-demo-notice p { color:#414c5d; margin-top:4px; }
 .page-heading { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:30px; }
 .page-heading>div { min-width:0; }
 .case-id { display:flex; gap:8px; align-items:center; color:var(--muted); }

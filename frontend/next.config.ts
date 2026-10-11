@@ -2,12 +2,13 @@ import type { NextConfig } from 'next';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-// Keep the existing development credential in the repository's server-only environment.
+// Public mode must be selected before startup, not enabled by loading local credentials.
+process.env.DISPUTEPILOT_PUBLIC_DEMO ??= 'false';
 const envFile = resolve(process.cwd(), '../.env');
-if (existsSync(envFile)) process.loadEnvFile(envFile);
+if (process.env.DISPUTEPILOT_PUBLIC_DEMO !== 'true' && existsSync(envFile)) process.loadEnvFile(envFile);
 
 const config: NextConfig = {
-  output: 'standalone',
+  output: process.env.DISPUTEPILOT_PUBLIC_DEMO === 'true' ? undefined : 'standalone',
   agentRules: false,
   poweredByHeader: false,
   devIndicators: false,
