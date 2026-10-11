@@ -31,10 +31,11 @@ def no_network(monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.delenv('GEMINI_AGENT_ENABLED', raising=False)
     monkeypatch.setenv('DEV_MERCHANT_TOKEN', TOKEN)
     monkeypatch.setenv('DEV_MERCHANT_ID', 'test-merchant')
     monkeypatch.setenv('PAYPAL_BASE_URL', main.DEFAULT_PAYPAL_BASE_URL)
-    monkeypatch.setattr(gemini, 'recommend', lambda assessment: {
+    monkeypatch.setattr(gemini, 'recommend', lambda assessment, **kwargs: {
         'model': 'test-model', 'api_status': 'OK', 'http_status': None,
         'attempts': 1, 'usage': [], 'fallback': False,
         'response': {
@@ -108,10 +109,77 @@ def approve(client, run, **changes):
     return client.post(f'/disputes/{DISPUTE}/approve', headers=AUTH, json=body)
 
 
+def test_investigation_persists_policy_sources(client, postgres, upstream, monkeypatch):
+    from backend import policy
+
+    captured = {}
+
+    def recommend(assessment, *, policy_excerpts):
+        captured.update(policy_excerpts)
+        return {'response': {'recommendation': 'NEEDS_REVIEW',
+                             'policy_refs': list(policy_excerpts)}}
+
+    monkeypatch.setattr(gemini, 'recommend', recommend)
+    result = client.post(f'/api/disputes/{DISPUTE}/investigate', headers=AUTH)
+    assert result.status_code == 201
+    run = result.json()
+    assessment = run['assessment']
+    sections = policy.search_policy(policy.QUERIES[upstream['reason']])
+    assert assessment['retrieved_policies'] == sections
+    assert captured == {f"{s['policy_id']}#{s['section_id']}": s['excerpt'] for s in sections}
+    assert assessment['risk'] == 'HIGH'
+    assert all(f['status'] == 'UNKNOWN' for f in assessment['facts'])
+    assert run['approval_state'] == 'PENDING'
+    assert run['execution_status'] == 'NOT_STARTED'
+    with postgres() as conn:
+        stored = conn.execute('SELECT assessment FROM runs WHERE run_id=%s',
+                              (run['run_id'],)).fetchone()
+    assert stored['assessment'] == assessment
+
+
 def events(postgres, run):
     with postgres() as conn:
         return conn.execute('SELECT * FROM audit_events WHERE run_id=%s ORDER BY event_id',
                             (run['run_id'],)).fetchall()
+
+
+def test_agent_flag_persists_trace_without_approval(client, postgres, upstream, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from google.genai import types
+    from backend import agent
+
+    monkeypatch.setenv('GEMINI_AGENT_ENABLED', 'true')
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    factory = MagicMock()
+    sdk = AsyncMock()
+    factory.return_value.aio.__aenter__ = AsyncMock(return_value=sdk)
+    factory.return_value.aio.__aexit__ = AsyncMock(return_value=False)
+    sdk.models.generate_content.side_effect = [
+        types.GenerateContentResponse(candidates=[types.Candidate(content=types.Content(
+            role='model', parts=[types.Part(function_call=types.FunctionCall(
+                name='get_shipping', args={},
+            ))],
+        ))]),
+        types.GenerateContentResponse(candidates=[types.Candidate(content=types.Content(
+            role='model', parts=[types.Part(text='{"recommendation":"NEEDS_REVIEW",'
+                '"summary":"Evidence is incomplete.","supporting_fact_ids":[], '
+                '"policy_refs":[],"missing_information":[]}')],
+        ))]),
+    ]
+    monkeypatch.setattr(agent.genai, 'Client', factory)
+    response = client.post(f'/api/disputes/{DISPUTE}/investigate', headers=AUTH)
+    assert response.status_code == 201
+    run = response.json()
+    assert run['assessment']['agent_trace'] == [{'tool': 'get_shipping', 'outcome': 'UNAVAILABLE'}]
+    assert not run['assessment']['recommendation']['fallback']
+    assert run['approval_state'] == 'PENDING'
+    assert run['execution_status'] == 'NOT_STARTED'
+    assert run['assessment']['risk'] == 'HIGH'
+    assert [e['event_type'] for e in events(postgres, run)] == ['INVESTIGATED']
+    with postgres() as conn:
+        saved = conn.execute('SELECT assessment FROM runs WHERE run_id=%s',
+                             (run['run_id'],)).fetchone()
+    assert saved['assessment'] == run['assessment']
 
 
 def mock_write(monkeypatch):
@@ -374,7 +442,6 @@ def test_only_approval_route_imports_write_module():
                                   if isinstance(n, ast.FunctionDef) and n.name == 'approve')
                 assert node in list(ast.walk(approve_fn))
     assert importers == ['main.py']
-    assert not list(Path('backend').glob('*agent*'))
 
 
 @pytest.mark.parametrize('case', ['confirmed', 'missing', 'duplicate', 'buyer', 'old'])

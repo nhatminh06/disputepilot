@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Path
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictBool
 
-from backend import database, gemini
+from backend import agent, database, gemini, policy
 from backend.evidence import EvidenceInput, PaymentData, assess_evidence
 
 
@@ -307,7 +307,17 @@ def investigate(
         if dispute.get('dispute_id') != dispute_id:
             raise HTTPException(502, 'PayPal returned a different dispute.')
         assessment = assessment_for_dispute(base_url, token, dispute)
-        assessment['recommendation'] = gemini.recommend(assessment)
+        if os.getenv('GEMINI_AGENT_ENABLED', '').lower() == 'true':
+            assessment.update(agent.investigate(assessment, parse_dispute(dispute).model_dump()))
+        else:
+            sections = policy.search_policy(policy.QUERIES.get(dispute.get('reason'), ''))
+            assessment['retrieved_policies'] = sections
+            assessment['recommendation'] = gemini.recommend(
+                assessment, policy_excerpts={
+                    f"{section['policy_id']}#{section['section_id']}": section['excerpt']
+                    for section in sections
+                },
+            )
     except requests.RequestException as error:
         raise_paypal_error(error)
     try:

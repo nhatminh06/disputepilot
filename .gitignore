@@ -4,3 +4,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+node_modules/
+.next/
+.env.local
+.env.*.local
+*.tsbuildinfo
+playwright-report/
+test-results/
