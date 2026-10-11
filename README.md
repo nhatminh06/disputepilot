@@ -153,6 +153,9 @@ An existing Chromium executable can be selected with `PLAYWRIGHT_CHROMIUM_EXECUT
 
 ## Troubleshooting and security limits
 
+The current frontend dependency audit and residual development-tooling advisory are
+documented in [`frontend/DEPENDENCY_SECURITY.md`](frontend/DEPENDENCY_SECURITY.md).
+
 PayPal action execution defaults to disabled. Only the exact host-development value
 `PAYPAL_WRITES_ENABLED=true` enables the approval path. Missing, false, uppercase,
 whitespace-padded and other values remain disabled. Compose pins the flag to the
