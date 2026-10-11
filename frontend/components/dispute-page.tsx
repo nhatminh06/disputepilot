@@ -8,6 +8,7 @@ import EvidenceCard from './evidence-card';
 import InvestigationCard from './investigation-card';
 import PoliciesCard from './policies-card';
 import AgentActivity from './agent-activity';
+import RunHistory from './run-history';
 
 async function getData(path: string, signal: AbortSignal, investigate = false): Promise<unknown> {
   const response = await fetch(path, {
@@ -26,6 +27,8 @@ export default function DisputePage({ id }: { id: string }) {
   const [dispute, setDispute] = useState<Dispute | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  const [newRunId, setNewRunId] = useState<string | null>(null);
+  const liveAssessment = useRef<Assessment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [investigationError, setInvestigationError] = useState<string | null>(null);
@@ -43,6 +46,7 @@ export default function DisputePage({ id }: { id: string }) {
     ]).then(([detail, evidence]) => {
       if (controller.signal.aborted) return;
       if (detail.dispute_id !== id || evidence.dispute_id !== id) throw new Error('Received a different dispute.');
+      liveAssessment.current = evidence;
       setDispute(detail); setAssessment(evidence); setError(null);
     }).catch((failure: unknown) => {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Could not load dispute data.');
@@ -57,6 +61,7 @@ export default function DisputePage({ id }: { id: string }) {
       const result = parseRun(await getData(`/api/disputes/${id}/investigate`, AbortSignal.timeout(125_000), true));
       if (result.dispute_id !== id) throw new Error('Received a different dispute.');
       setRun(result); setAssessment(result.assessment);
+      setNewRunId(result.run_id);
     } catch (failure: unknown) {
       setInvestigationError(`${failure instanceof Error ? failure.message : 'Investigation outcome unknown.'} No automatic retry. Check the backend record before starting another run.`);
     } finally { setBusy(false); }
@@ -97,9 +102,10 @@ export default function DisputePage({ id }: { id: string }) {
           <PoliciesCard policies={assessment.retrieved_policies} investigated={!!run} />
           <AgentActivity run={run} busy={busy} />
           <section className="card investigation-details" id="run-details" aria-labelledby="details-title"><div className="card-heading"><h2 id="details-title">Investigation details</h2><span className="small muted">{run ? 'Persisted backend record' : 'No run in this session'}</span></div>
-            {run ? <dl className="run-details"><div><dt>Run ID</dt><dd className="mono">{run.run_id}</dd></div><div><dt>Investigation status</dt><dd>{readable(run.investigation_status)}</dd></div><div><dt>Recommendation</dt><dd>{run.assessment.recommendation?.response.recommendation}</dd></div><div><dt>Approval</dt><dd>{run.approval_state}</dd></div><div><dt>Execution</dt><dd>{run.execution_status}</dd></div></dl> : <p className="empty-inline">Run an investigation to create a persisted assessment and recommendation. Previous runs are not loaded on this page.</p>}
+            {run ? <dl className="run-details"><div><dt>Run ID</dt><dd className="mono">{run.run_id}</dd></div><div><dt>Investigation status</dt><dd>{readable(run.investigation_status)}</dd></div><div><dt>Recommendation</dt><dd>{run.assessment.recommendation?.response.recommendation ?? 'Not available'}</dd></div><div><dt>Approval</dt><dd>{run.approval_state}</dd></div><div><dt>Execution</dt><dd>{run.execution_status}</dd></div></dl> : <p className="empty-inline">Run an investigation or select a saved run from history to inspect its details.</p>}
           </section>
-          <footer className="page-footer"><ShieldCheck size={14} /><span>Evidence informs. People decide.</span><span className="footer-end">PayPal Sandbox · No payment actions on this page</span></footer>
+          <RunHistory id={id} newRunId={newRunId} onSelect={saved => { setRun(saved); setAssessment(saved.assessment); }} onNew={() => { setRun(null); setAssessment(liveAssessment.current); submitting.current = false; }} />
+          <footer className="page-footer"><ShieldCheck size={14} /><span>Evidence informs. People decide.</span><span className="footer-end">PayPal Sandbox · Explicit merchant approval required</span></footer>
         </> : <p className="empty-inline">No dispute data returned.</p>}
       </main>
     </div>

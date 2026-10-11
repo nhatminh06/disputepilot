@@ -295,6 +295,56 @@ class ApprovalRequest(BaseModel):
     confirmed: StrictBool
 
 
+def history_assessment(saved: dict[str, Any], dispute_id: str) -> dict[str, Any]:
+    evidence = gemini.evidence_payload(saved)
+    evidence.pop('policy_excerpts')
+    evidence['dispute_id'] = dispute_id
+    for fact in evidence['facts']:
+        fact['source'] = 'Persisted deterministic assessment (source identifiers withheld)'
+    for rule in evidence['rules']:
+        rule['explanation'] = next((r.get('explanation', '') for r in saved.get('rules', [])
+                                    if r.get('rule_id') == rule['rule_id']), '')
+    evidence['retrieved_policies'] = [
+        {key: section.get(key) for key in ('policy_id', 'section_id', 'excerpt', 'source_path')}
+        for section in saved.get('retrieved_policies', [])
+    ]
+    recommendation = saved.get('recommendation')
+    if recommendation:
+        evidence['recommendation'] = {
+            key: recommendation[key] for key in ('model', 'api_status', 'fallback', 'attempts')
+            if key in recommendation
+        }
+        evidence['recommendation']['response'] = gemini.Recommendation.model_validate(
+            recommendation['response'],
+        ).model_dump()
+        evidence['recommendation']['usage'] = [
+            {'total_token_count': item.get('total_token_count')}
+            for item in recommendation.get('usage', [])[:4]
+        ]
+    if 'agent_trace' in saved:
+        evidence['agent_trace'] = [
+            {'tool': item.get('tool') if item.get('tool') in agent.TOOLS else 'UNKNOWN',
+             'outcome': item.get('outcome') if item.get('outcome') in {
+                 'AVAILABLE', 'UNAVAILABLE', 'REJECTED', 'TIMEOUT', 'RUNNING', 'ERROR',
+             } else 'UNKNOWN'} for item in saved['agent_trace'][:6]
+        ]
+    return evidence
+
+
+@app.get('/api/disputes/{dispute_id}/history')
+def history(
+    dispute_id: Annotated[str, Path(pattern=r'^[A-Z0-9-]{1,255}$')],
+    merchant: Annotated[str, Depends(authenticate_merchant)],
+) -> dict[str, Any]:
+    try:
+        result = database.history(dispute_id, merchant, MESSAGE)
+    except psycopg.Error as error:
+        raise HTTPException(503, 'Stored history is unavailable.') from error
+    for run in result['runs']:
+        run['assessment'] = history_assessment(run['assessment'], dispute_id)
+    return result
+
+
 @app.post('/api/disputes/{dispute_id}/investigate', status_code=201)
 def investigate(
     dispute_id: Annotated[str, Path(pattern=r'^[A-Z0-9-]{1,255}$')],

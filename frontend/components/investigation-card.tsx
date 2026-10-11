@@ -21,7 +21,7 @@ export default function InvestigationCard({ run, busy, error, disabled, onInvest
       <h4>Missing information</h4>
       {response.missing_information.length ? <ul className="missing-list">{response.missing_information.map(id => <li key={id}><CircleHelp size={14} />{factLabel(id)}</li>)}</ul> : <p className="small muted">No missing information reported by the evidence engine.</p>}
       {response.policy_refs.length > 0 && <><h4>Policy citations</h4><div className="citation-list">{response.policy_refs.map(ref => <a key={ref} href={`#policy-${ref.replace('#', '-')}`}>{ref}</a>)}</div></>}
-    </div> : <div className="ai-empty">
+    </div> : run ? <p className="empty-inline">No recommendation was stored for this investigation. Select another saved run or prepare a new investigation below.</p> : <div className="ai-empty">
       <div className="ai-emblem"><Sparkles size={25} strokeWidth={1.5} /></div>
       <h3>Investigate the evidence.</h3>
       <p>Bring together verified evidence and relevant demo policies for a structured recommendation.</p>

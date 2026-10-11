@@ -109,6 +109,77 @@ def approve(client, run, **changes):
     return client.post(f'/disputes/{DISPUTE}/approve', headers=AUTH, json=body)
 
 
+def test_history_auth_ownership_and_cross_dispute(client, postgres, run, monkeypatch):
+    path = f'/api/disputes/{DISPUTE}/history'
+    assert client.get(path).status_code == 401
+    assert client.get('/api/disputes/PP-OTHER/history', headers=AUTH).status_code == 404
+    monkeypatch.setenv('DEV_MERCHANT_ID', 'another-merchant')
+    assert client.get(path, headers=AUTH).status_code == 404
+
+
+def test_history_projection_and_eligibility(client, postgres, run):
+    with postgres() as conn:
+        database.audit(conn, run['run_id'], 'INVESTIGATED', 'test-merchant',
+                       {'access_token': 'do-not-expose', 'buyer': 'private@example.test'})
+    response = client.get(f'/api/disputes/{DISPUTE}/history', headers=AUTH)
+    assert response.status_code == 200
+    stored = response.json()['runs'][0]
+    assert stored['run_id'] == run['run_id']
+    assert stored['eligibility'] == 'ELIGIBLE'
+    assert stored['message'] == main.MESSAGE
+    assert stored['assessment']['risk'] == run['assessment']['risk']
+    assert stored['assessment']['recommendation']['response'] == run['assessment']['recommendation']['response']
+    assert stored['audit_events'][0]['actor'] == 'Merchant'
+    assert not any(key in response.text for key in (
+        'idempotency_key', 'paypal_result', 'access_token', 'private@example.test',
+        'do-not-expose', 'test-merchant', 'approved_by',
+    ))
+
+
+def test_history_bounds_and_historical_success_blocks_new_runs(client, postgres, run):
+    database.reserve(run['run_id'], DISPUTE, 'test-merchant', {})
+    database.finish(run['run_id'], 'SUCCEEDED', {'http_status': 200}, 'test-merchant')
+    for _ in range(27):
+        database.create_run({'dispute_id': DISPUTE}, run['assessment'], 'test-merchant', main.MESSAGE)
+    data = client.get(f'/api/disputes/{DISPUTE}/history', headers=AUTH).json()
+    assert len(data['runs']) == 25
+    assert run['run_id'] not in [item['run_id'] for item in data['runs']]
+    assert data['approved_action']['run_id'] == run['run_id']
+    assert data['approved_action']['execution_status'] == 'SUCCEEDED'
+    assert all(item['eligibility'] == 'ALREADY_SENT' for item in data['runs'])
+    assert all(item['approval_state'] == 'PENDING' for item in data['runs'])
+    keys = [(item['created_at'], item['run_id']) for item in data['runs']]
+    assert keys == sorted(keys, reverse=True)
+
+
+def test_history_audit_order_and_reconciliation(client, postgres, run):
+    database.reserve(run['run_id'], DISPUTE, 'test-merchant', {})
+    database.finish(run['run_id'], 'REQUIRES_RECONCILIATION', {}, 'test-merchant')
+    data = client.get(f'/api/disputes/{DISPUTE}/history', headers=AUTH).json()
+    stored = data['runs'][0]
+    assert stored['eligibility'] == 'REQUIRES_RECONCILIATION'
+    assert [event['event_type'] for event in stored['audit_events']] == [
+        'INVESTIGATED', 'APPROVED', 'EXECUTION_RESERVED', 'REQUIRES_RECONCILIATION',
+    ]
+    assert [e['occurred_at'] for e in stored['audit_events']] == sorted(
+        e['occurred_at'] for e in stored['audit_events']
+    )
+
+
+def test_history_failed_approval_remains_reserved(client, postgres, run):
+    database.reserve(run['run_id'], DISPUTE, 'test-merchant', {})
+    database.finish(run['run_id'], 'FAILED', {}, 'test-merchant')
+    data = client.get(f'/api/disputes/{DISPUTE}/history', headers=AUTH).json()
+    assert data['runs'][0]['eligibility'] == 'ALREADY_APPROVED'
+
+
+def test_history_unsupported_message_is_ineligible(client, postgres, run):
+    with postgres() as conn:
+        conn.execute('UPDATE runs SET message=%s WHERE run_id=%s', ('Unsupported', run['run_id']))
+    data = client.get(f'/api/disputes/{DISPUTE}/history', headers=AUTH).json()
+    assert data['runs'][0]['eligibility'] == 'INELIGIBLE'
+
+
 def test_investigation_persists_policy_sources(client, postgres, upstream, monkeypatch):
     from backend import policy
 

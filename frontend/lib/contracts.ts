@@ -63,6 +63,20 @@ export interface Run {
   approval_state: string;
   execution_status: string;
 }
+export interface SavedRun extends Run {
+  created_at: string;
+  approved_at: string | null;
+  executed_at: string | null;
+  action_type: string;
+  message: string;
+  eligibility: 'ELIGIBLE' | 'ALREADY_SENT' | 'ALREADY_APPROVED' | 'REQUIRES_RECONCILIATION' | 'INELIGIBLE';
+  audit_events: { event_type: string; occurred_at: string; actor: string }[];
+}
+export interface History {
+  dispute_id: string;
+  runs: SavedRun[];
+  approved_action: { run_id: string; execution_status: string; approved_at: string | null; executed_at: string | null } | null;
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid response');
@@ -172,4 +186,33 @@ export function parseRun(value: unknown): Run {
   return { run_id: string(r.run_id), dispute_id: string(r.dispute_id), assessment,
     investigation_status: string(r.investigation_status),
     approval_state: string(r.approval_state), execution_status: string(r.execution_status) };
+}
+
+export function parseHistory(value: unknown): History {
+  const h = object(value);
+  const dispute_id = string(h.dispute_id);
+  const runs = list(h.runs, item => {
+    const r = object(item);
+    const assessment = parseAssessment(r.assessment);
+    if (r.dispute_id !== dispute_id || assessment.dispute_id !== dispute_id) throw new Error('Different dispute');
+    return {
+      run_id: string(r.run_id), dispute_id, assessment,
+      investigation_status: string(r.investigation_status),
+      approval_state: choice(r.approval_state, ['PENDING', 'APPROVED'] as const),
+      execution_status: choice(r.execution_status, ['NOT_STARTED', 'SUCCEEDED', 'FAILED', 'REQUIRES_RECONCILIATION'] as const),
+      created_at: string(r.created_at), approved_at: nullable(r.approved_at), executed_at: nullable(r.executed_at),
+      action_type: string(r.action_type), message: string(r.message),
+      eligibility: choice(r.eligibility, ['ELIGIBLE', 'ALREADY_SENT', 'ALREADY_APPROVED', 'REQUIRES_RECONCILIATION', 'INELIGIBLE'] as const),
+      audit_events: list(r.audit_events, item => {
+        const event = object(item);
+        return { event_type: traceLabel(event.event_type, ['INVESTIGATED', 'APPROVED', 'EXECUTION_RESERVED', 'SUCCEEDED', 'FAILED', 'REQUIRES_RECONCILIATION']),
+          occurred_at: string(event.occurred_at), actor: traceLabel(event.actor, ['Merchant', 'Recorded actor']) };
+      }).slice(0, 100),
+    };
+  }).slice(0, 25);
+  const action = h.approved_action == null ? null : object(h.approved_action);
+  return { dispute_id, runs, approved_action: action ? {
+    run_id: string(action.run_id), execution_status: string(action.execution_status),
+    approved_at: nullable(action.approved_at), executed_at: nullable(action.executed_at),
+  } : null };
 }

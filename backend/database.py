@@ -71,6 +71,57 @@ def check_run(run: dict[str, Any] | None, dispute_id: str, merchant: str) -> Non
         raise HTTPException(409, 'Action already reserved. Do not retry; reconcile it.')
 
 
+def history(dispute_id: str, merchant: str, supported_message: str) -> dict[str, Any]:
+    with connect() as conn:
+        # One snapshot keeps eligibility and history consistent during concurrent approval.
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        owner = conn.execute(
+            'SELECT dispute_id FROM disputes WHERE dispute_id=%s AND merchant_id=%s',
+            (dispute_id, merchant),
+        ).fetchone()
+        if owner is None:
+            raise HTTPException(404, 'No stored dispute for this merchant.')
+        approved = conn.execute(
+            '''SELECT r.run_id, r.execution_status, r.approved_at, r.executed_at
+               FROM runs r JOIN disputes d USING (dispute_id)
+               WHERE r.dispute_id=%s AND d.merchant_id=%s
+                 AND r.action_type='SEND_MESSAGE' AND r.approval_state='APPROVED' ''',
+            (dispute_id, merchant),
+        ).fetchone()
+        runs = conn.execute(
+            '''SELECT r.run_id, r.dispute_id, r.assessment, r.investigation_status,
+                      r.action_type, r.message, r.approval_state, r.execution_status,
+                      r.created_at, r.approved_at, r.executed_at
+               FROM runs r JOIN disputes d USING (dispute_id)
+               WHERE r.dispute_id=%s AND d.merchant_id=%s
+               ORDER BY r.created_at DESC, r.run_id DESC LIMIT 25''',
+            (dispute_id, merchant),
+        ).fetchall()
+        for run in runs:
+            run['audit_events'] = conn.execute(
+                '''SELECT event_type, occurred_at,
+                          CASE WHEN actor=%s THEN 'Merchant' ELSE 'Recorded actor' END AS actor
+                   FROM audit_events WHERE run_id=%s
+                   ORDER BY occurred_at, event_id LIMIT 100''',
+                (merchant, run['run_id']),
+            ).fetchall()
+            if approved:
+                status = approved['execution_status']
+                run['eligibility'] = (
+                    'ALREADY_SENT' if status == 'SUCCEEDED' else
+                    'REQUIRES_RECONCILIATION' if status == 'REQUIRES_RECONCILIATION'
+                    else 'ALREADY_APPROVED'
+                )
+            elif (run['approval_state'] == 'PENDING'
+                  and run['execution_status'] == 'NOT_STARTED'
+                  and run['action_type'] == 'SEND_MESSAGE'
+                  and run['message'] == supported_message):
+                run['eligibility'] = 'ELIGIBLE'
+            else:
+                run['eligibility'] = 'INELIGIBLE'
+    return {'dispute_id': dispute_id, 'runs': runs, 'approved_action': approved}
+
+
 def get_pending_run(run_id: UUID, dispute_id: str, merchant: str) -> dict[str, Any]:
     with connect() as conn:
         run = conn.execute(
