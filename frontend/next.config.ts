@@ -7,6 +7,7 @@ const envFile = resolve(process.cwd(), '../.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const config: NextConfig = {
+  output: 'standalone',
   agentRules: false,
   poweredByHeader: false,
   devIndicators: false,
