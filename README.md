@@ -1,198 +1,249 @@
 # DisputePilot
-License: MIT. See LICENSE.
 
-Local-only PayPal Sandbox dispute workspace. Deterministic rules supply evidence
-and risk; Gemini recommendations are advisory. Only explicit merchant approval can
-reach the separate SEND_MESSAGE execution function.
+DisputePilot is a human-in-the-loop PayPal Sandbox dispute investigation workspace.
+It collects case evidence, applies deterministic rules, asks Gemini for a grounded
+recommendation, and presents the result for merchant review.
 
-## Architecture
+The model does not assign risk or authorize actions. Risk and evidence status come
+from application rules, model citations are validated against known fact IDs, and
+the agent cannot import the write module. The only implemented PayPal write is a
+fixed Sandbox message sent after explicit merchant approval.
 
 ![DisputePilot system architecture](architecture.png)
 
-The browser reaches FastAPI through the Next.js server proxy. The investigation
-path can only read dispute, order, shipping, and policy data. Deterministic rules
-produce evidence facts and risk before the bounded agent asks Gemini for an
-explanation and recommendation. Runs, evidence snapshots, and audit events are
-stored in PostgreSQL.
+## What it demonstrates
 
-The write path is separate from the agent. A merchant must review the recommendation
-and explicitly approve it before the approval endpoint can call the write module.
-Ownership, state, action eligibility, and duplicate execution are checked at that
-boundary. Public demo and Docker Compose modes keep PayPal writes disabled.
+- Read-only retrieval of PayPal Sandbox dispute and capture data.
+- Deterministic evidence facts, rule outcomes, risk, and review requirements.
+- A bounded Gemini agent with four read-only tools.
+- Grounded `CONTEST`, `REFUND`, or `NEEDS_REVIEW` recommendations.
+- Saved investigations, evidence snapshots, and audit history in PostgreSQL.
+- A separate approval boundary with ownership, state, eligibility, and duplicate checks.
+- A synthetic, read-only public demo that requires no PayPal, Gemini, or database credentials.
+- Offline safety evaluation, browser tests, isolated database tests, secret scanning,
+  dependency checks, and container builds in CI.
 
-## Public read-only demo (Vercel Hobby)
+## Architecture
 
-The optional public demo serves one synthetic case, `PP-DEMO-001`, entirely from
-`frontend/lib/public-demo.ts`. Recommendations, tool traces, audit events, and dates
-are labeled examples, not fresh model or PayPal results. All mutation requests are
-rejected. Missing examples fail closed without an upstream lookup.
+```text
+Browser
+  -> Next.js workspace and server-side API proxy
+    -> FastAPI authenticated routes
+      -> PayPal Sandbox read APIs
+      -> deterministic evidence engine
+      -> bounded read-only agent -> Gemini
+      -> PostgreSQL runs and audit events
 
-For a personal, non-commercial demo within Vercel Hobby limits, use these project
-settings when deployment is authorized:
-
-| Setting | Value |
-| --- | --- |
-| Framework preset | Next.js |
-| Root directory | `frontend` |
-| Include files outside root directory | Disabled |
-| Node.js version | `24.x` |
-| Install command | `npm ci` |
-| Build command | `npm run build` |
-| Output directory | Framework default, no override |
-| Environment variable | `DISPUTEPILOT_PUBLIC_DEMO=true` for Production, Preview, and Development |
-
-Do not add merchant, PayPal, Gemini, or database credentials to this Vercel project.
-Do not upload `.env` files, configure an upstream backend, or use a `NEXT_PUBLIC_`
-prefix for the mode flag. The flag must be set before the build and remain set at
-runtime. Public mode skips the repository-root `.env` loader and does not import
-the authenticated upstream proxy. The root page offers the synthetic example and
-rejects other dispute IDs without an upstream lookup.
-
-For a local preview from `frontend/`:
-
-```sh
-env DISPUTEPILOT_PUBLIC_DEMO=true npm run dev
+Merchant approval
+  -> dedicated FastAPI approval endpoint
+    -> atomic PostgreSQL reservation
+      -> separate PayPal Sandbox write module
 ```
 
-`npm test` runs the existing mock-backend suite followed by a separate public-demo
-suite with no backend or credentials. Public mode is off unless the flag is exactly
-`true`. Leave it unset for the existing local or Docker Compose application;
-Compose configuration, authentication, and approval protections are unchanged.
+The investigation agent can call only:
 
-Deployment is manual. Creating a Vercel project or connecting Git can trigger a
-deployment, so do so only after review. Hobby limits and non-commercial restrictions
-apply: [Hobby plan](https://vercel.com/docs/plans/hobby),
-[build settings](https://vercel.com/docs/builds/configure-a-build),
-[Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions).
+- `get_dispute`
+- `get_order`
+- `get_shipping`
+- `search_policy`
 
-## Prerequisites
+It is limited to 6 tool calls, 4 iterations, and 20 seconds. Tool responses and
+policy text are treated as untrusted data. If the model call, tool loop, or output
+validation fails, the application returns `NEEDS_REVIEW`.
 
-- Docker Engine and Docker Compose with health-check dependency support.
-- Port 3000 available on the host. Stop a native Next.js process before starting
-  Compose; do not run both on that port.
-- PayPal Sandbox business REST credentials and a development merchant identity.
-- A Gemini API key only if you want to request an investigation with Gemini.
+The recommendation validator accepts only evidence fact IDs and policy references
+produced by the application. Supporting and adverse citations are checked against
+deterministic rule outcomes. Missing information is derived in Python, not trusted
+from model output.
 
-The images use digest-pinned Python 3.11, Node 24 LTS, and PostgreSQL 17 bases.
-Backend runtime dependencies are pinned in `backend/requirements.lock`; the
-frontend uses `npm ci` and `frontend/package-lock.json`. Update these deliberately
-when upgrading dependencies. No secrets are required to build either image.
+## Safety model
 
-## Environment
+DisputePilot separates investigation from execution:
 
-For a new checkout, copy `.env.example` to `.env` and fill its placeholders locally.
-Do not overwrite an existing `.env`. Never paste credentials into logs or commits.
+1. The backend reads the current PayPal dispute and related capture data.
+2. Deterministic rules classify facts as `VERIFIED`, `MISSING`, or `UNKNOWN` and
+   calculate `LOW`, `MEDIUM`, or `HIGH` risk.
+3. The agent explains the evidence and recommends an outcome without write access.
+4. The result and tool trace are persisted for review.
+5. A merchant reviews the exact saved action and confirms it explicitly.
+6. The approval endpoint rechecks merchant ownership, run state, current PayPal
+   state, action eligibility, and prior execution before reserving one attempt.
+7. Only the separate write module can send the fixed Sandbox message.
 
-Required for Compose:
+`PAYPAL_WRITES_ENABLED` defaults to disabled. Docker Compose pins it to `false`,
+and the public demo rejects every mutation. Ambiguous write outcomes remain reserved
+for manual reconciliation and are never retried automatically. See
+[`backend/APPROVAL.md`](backend/APPROVAL.md) for the approval contract and recovery
+rules.
 
-- `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`: Sandbox business REST app credentials.
-- `PAYPAL_BASE_URL`: `https://api-m.sandbox.paypal.com`. Non-Sandbox hosts are rejected.
-- `DEV_MERCHANT_ID`: the local merchant identity recorded in approval/audit records.
-- `DEV_MERCHANT_TOKEN`: a strong random development bearer token of at least 32 characters.
-- `COMPOSE_POSTGRES_PASSWORD`: a separate strong password for the Compose database.
+## Technology
 
-Optional investigation configuration:
+| Layer | Implementation |
+| --- | --- |
+| Frontend | Next.js 16, React 19, TypeScript, Playwright |
+| Backend | Python 3.11, FastAPI, Pydantic |
+| Model | Gemini 3.1 Flash-Lite through `google-genai` |
+| Data | PostgreSQL 17 with `psycopg` |
+| External API | PayPal Customer Disputes and Payments Sandbox APIs |
+| Delivery | Docker Compose, GitHub Actions, optional Vercel public demo |
 
-- `GEMINI_API_KEY`: kept only in the backend container.
-- `GEMINI_MODEL`: defaults to `gemini-3.1-flash-lite`.
-- `GEMINI_AGENT_ENABLED`: defaults to `false`. Enable only when intentionally testing
-  the bounded read-only agent. Opening the UI or running a health check never invokes Gemini.
+## Public read-only demo
 
-`DATABASE_URL` and `TEST_DATABASE_URL` remain host-development settings. Compose
-ignores them and constructs its connection to the fixed `postgres:5432` service,
-using database/user `disputepilot` and `COMPOSE_POSTGRES_PASSWORD`.
+Set `DISPUTEPILOT_PUBLIC_DEMO=true` before starting or building the frontend. The
+home page accepts only `PP-DEMO-001` and also links directly to the sample case.
 
-Compose interpolates `.env` at runtime; it does not mount or copy the file into
-images. The frontend gets only the merchant token, the fixed internal backend URL,
-and the explicit Compose-mode flag. No secret uses a `NEXT_PUBLIC_` variable.
+The sample is defined in `frontend/lib/public-demo.ts`. Its dispute, evidence,
+recommendation, tool trace, policies, and audit history are synthetic and visibly
+labeled. Public mode:
 
-## Start and inspect
+- makes no PayPal, Gemini, database, or backend request;
+- exposes no merchant credential;
+- rejects mutation methods;
+- returns 404 for unsupported dispute IDs and operations;
+- fails closed without attempting an upstream lookup.
 
-From the repository root:
+Run it locally:
+
+```sh
+cd frontend
+npm ci
+DISPUTEPILOT_PUBLIC_DEMO=true npm run dev
+```
+
+Open `http://localhost:3000/`.
+
+For Vercel, use `frontend` as the root directory, Node.js 24, `npm ci`, and
+`npm run build`. Set `DISPUTEPILOT_PUBLIC_DEMO=true` for every deployed environment.
+Do not configure PayPal, Gemini, database, or merchant credentials in the public
+demo project.
+
+## Local Sandbox setup
+
+### Prerequisites
+
+- Docker Engine with Docker Compose.
+- PayPal Sandbox business REST credentials.
+- A local merchant identity and a random bearer token of at least 32 characters.
+- A Gemini API key only when model-backed investigations are needed.
+
+Copy the example environment file once, then fill the placeholders locally:
+
+```sh
+cp .env.example .env
+```
+
+Required Compose values:
+
+| Variable | Purpose |
+| --- | --- |
+| `PAYPAL_CLIENT_ID` | PayPal Sandbox REST application ID |
+| `PAYPAL_CLIENT_SECRET` | PayPal Sandbox REST application secret |
+| `PAYPAL_BASE_URL` | Must remain a permitted PayPal Sandbox origin |
+| `DEV_MERCHANT_ID` | Local identity stored in runs and audit events |
+| `DEV_MERCHANT_TOKEN` | Server-side development bearer credential |
+| `COMPOSE_POSTGRES_PASSWORD` | Password for the Compose PostgreSQL service |
+
+Optional investigation values:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GEMINI_API_KEY` | empty | Enables Gemini requests when the agent flag is enabled |
+| `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Model used for recommendations |
+| `GEMINI_AGENT_ENABLED` | `false` | Enables the bounded tool-calling agent |
+
+Secrets stay in `.env`, which is ignored by Git. The browser never receives the
+merchant token, PayPal secret, Gemini key, or database URL.
+
+### Start with Docker Compose
 
 ```sh
 docker compose config --quiet
-docker compose up --build -d
+docker compose up --build -d --wait
 docker compose ps
 ```
 
-Wait until all three services are healthy. Open `http://localhost:3000/`, or:
+Open `http://localhost:3000/` and enter a PayPal Sandbox dispute ID.
 
-`http://localhost:3000/disputes/PP-R-UZR-10190879`
+Only the frontend is published, on `127.0.0.1:3000`. The backend and PostgreSQL
+remain on the Compose network. PostgreSQL readiness gates the backend, and frontend
+startup waits for the backend health check.
 
-Architecture:
-
-```text
-Browser -> 127.0.0.1:3000 -> Next.js -> backend:8000 -> postgres:5432
-                                      |
-                                      +-> PayPal Sandbox / Gemini HTTPS
-```
-
-Only the frontend port is published, bound to host loopback. Backend and database
-ports are not published. Inside containers the servers listen on the container
-interface. Outside Compose, the existing proxy still accepts only its fixed local
-development addresses. `http://backend:8000` is allowed only in explicit Compose mode.
-
-PostgreSQL readiness gates backend startup. The backend runs the existing
-idempotent `CREATE TABLE IF NOT EXISTS` schema setup before starting Uvicorn.
-Frontend startup waits for the backend HTTP health check. Health checks are local
-and never perform PayPal actions or Gemini requests.
-
-For a foreground readiness check after the first build:
-
-```sh
-docker compose up -d --wait
-curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:3000/
-```
-
-Do not print resolved `docker compose config` output or container environment
-variables: they contain credentials. Use `config --quiet` instead. Inspect logs
-locally and redact identifiers before sharing:
-
-```sh
-docker compose logs --tail=50 backend frontend
-```
-
-## Stop and persistence
+Stop the services without deleting stored investigations:
 
 ```sh
 docker compose down
-docker compose up -d --wait
 ```
 
-The named volume `disputepilot-demo_postgres_data` survives `down`. Schema startup
-does not delete or recreate existing records. Removing this volume, including via
-the volume-deletion option of `compose down`, destroys its runs and audit history.
-Do not remove volumes as a troubleshooting step.
+The `disputepilot-demo_postgres_data` volume persists runs and audit history. Do
+not remove it as a troubleshooting step. Losing the database also loses the local
+approval history used to block repeat execution.
 
-The Compose database is separate from the existing native development database
-and its `disputepilot_pgdata` volume. A clean Compose database has no imported
-history. The real PayPal dispute/evidence can still load, while history displays
-an empty state. No automatic import or investigation is performed.
+### Run services natively
 
-Important: an empty database does not prove that no PayPal action occurred. The
-existing dispute `PP-R-UZR-10190879` already received a message in the development
-environment. Do not authorize another message from a fresh database. Historical
-approval protection is scoped to the database containing those records. Any
-future data migration must preserve approvals and audit records, not reset them.
-
-Changing the password in `.env` does not change an existing PostgreSQL role's
-password. Keep the established password or perform an explicit credential rotation;
-do not delete the volume to resolve a password mismatch.
-
-## Verification and development
-
-The local frontend development instructions remain in `frontend/README.md`.
-Native services use host `.venv` and `DATABASE_URL`; Docker uses its pinned Python
-3.11 runtime and independent database. Do not run the native frontend on port 3000
-at the same time as Compose.
-
-Checks from the repository root and frontend directory:
+Install Python dependencies into a virtual environment and configure `DATABASE_URL`
+for a local PostgreSQL database:
 
 ```sh
-.venv/bin/python -m compileall -q backend tests
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -c backend/requirements.lock
+.venv/bin/python -m backend.database
+.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+
+```sh
+cd frontend
+npm ci
+npm run dev
+```
+
+The Next.js server loads the repository-root `.env` and attaches the merchant token
+to approved upstream requests. Both development servers bind to loopback. This is
+development authentication, not production merchant identity or authorization.
+
+## Application flow
+
+From the home page, open a dispute by its Sandbox ID. The workspace displays case
+metadata, deterministic evidence and risk, saved investigations, policy excerpts,
+agent activity, and audit events.
+
+Starting an investigation creates and persists one run. It does not contact the
+write endpoint. Selecting an older run reads its saved result without invoking
+Gemini again.
+
+The approval UI shows the exact persisted action and requires an explicit checkbox.
+Approval currently supports only `SEND_MESSAGE`; it does not submit evidence,
+accept a claim, issue a refund, or automatically resolve a dispute.
+
+## API surface
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/disputes/{id}` | Read sanitized dispute details |
+| `GET` | `/api/disputes/{id}/assessment` | Build deterministic evidence and risk |
+| `GET` | `/api/disputes/{id}/history` | Read merchant-owned runs and audit events |
+| `POST` | `/api/disputes/{id}/investigate` | Create a persisted investigation |
+| `POST` | `/disputes/{id}/approve` | Confirm and execute the supported saved action |
+
+Investigation, history, and approval routes require the development merchant bearer
+credential. Browser requests use the same-origin Next.js proxy, which allows only
+the fixed operations above, validates response shapes, refuses redirects, and adds
+credentials server-side.
+
+## Verification
+
+Backend checks from the repository root:
+
+```sh
+.venv/bin/python -m compileall -q backend spike evaluation tests
 .venv/bin/python -m pytest -q
-git diff --check
+.venv/bin/python -m evaluation.run_evaluation --check
+```
+
+Frontend checks:
+
+```sh
 cd frontend
 npm run typecheck
 npm run lint
@@ -200,68 +251,46 @@ npm test
 npm run build
 ```
 
-Set `TEST_DATABASE_URL` only to a dedicated disposable PostgreSQL container with
-database `disputepilot_approval_test`, role `approval_test`, fresh random credentials,
-tmpfs data storage and a dynamically assigned loopback port. Verify the container
-identity and mounts first, then set `DISPUTEPILOT_TEST_ISOLATED=true` for the test
-process. Fixtures check the connection parameters and actual database identity
-before creating or dropping their UUID-named schemas. Never use a development or
-Compose application database. Remove only the test container after verification;
-do not remove application volumes. Without the test URL those tests skip.
-Browser tests use a mock backend on 8001 and a
-test frontend on 3001, not the running Compose services. They mock action execution.
-An existing Chromium executable can be selected with `PLAYWRIGHT_CHROMIUM_EXECUTABLE`.
+Playwright runs both the local mock-backend suite and the credential-free public
+demo suite. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to a compatible installed browser,
+or install Chromium through Playwright.
 
-## Troubleshooting and security limits
+Database integration tests require a dedicated disposable PostgreSQL database named
+`disputepilot_approval_test`, `TEST_DATABASE_URL`, and
+`DISPUTEPILOT_TEST_ISOLATED=true`. Without that configuration, those tests skip.
+Never point them at a development or Compose application database.
 
-The current frontend dependency audit and residual development-tooling advisory are
-documented in [`frontend/DEPENDENCY_SECURITY.md`](frontend/DEPENDENCY_SECURITY.md).
+The stored offline evaluation covers 12 synthetic scenarios and validates
+deterministic expectations, grounded recommendation handling, fallback behavior,
+and agent safety checks without external calls. See
+[`evaluation/REPORT.md`](evaluation/REPORT.md) and
+[`evaluation/README.md`](evaluation/README.md). The live report is a bounded
+historical benchmark, not a general model-accuracy claim.
 
-PayPal action execution defaults to disabled. Only the exact host-development value
-`PAYPAL_WRITES_ENABLED=true` enables the approval path. Missing, false, uppercase,
-whitespace-padded and other values remain disabled. Compose pins the flag to the
-literal `false`, regardless of the host `.env`. Disabled approvals return HTTP 403
-after merchant authentication, before database reservation, audit writes or PayPal
-calls. History exposes only the boolean `paypal_writes_enabled` capability; pending
-runs are not executable in demo mode. Existing successful history stays visible.
+## Repository layout
 
-When explicitly enabled outside Compose, approval reads current PayPal dispute
-details before reservation and rejects an exact matching SELLER message. It requires
-readable `posted_by`, `content` and timezone-aware `time_posted` fields for every
-message. Missing, malformed, future-dated, paginated or size-capped history blocks
-execution. Empty history also blocks: the current
-[PayPal Disputes schema](https://developer.paypal.com/api/customer-disputes/v1/schema.json)
-defines `message_list` with 1 to 1000 entries, not an authoritative empty-history
-marker. No extra completeness field is assumed. These are application safety
-requirements, not a claim that all schema properties are required by PayPal.
+```text
+backend/       FastAPI routes, evidence rules, agent, persistence, approval boundary
+frontend/      Next.js workspace, server proxy, public demo, Playwright tests
+evaluation/    Synthetic scenarios and offline/live evaluation reports
+policies/      Synthetic merchant policy fixtures used for demonstration
+spike/         Initial PayPal Sandbox read experiments
+tests/         Backend, safety, approval, and evaluation tests
+compose.yaml   Local three-service deployment
+```
 
-Remote history is an additional defense, not cross-database idempotency. PayPal does
-not provide an atomic history-check-and-send operation or a completeness guarantee.
-Two independent enabled deployments can race, and reads can lag writes. Do not run
-multiple write-enabled deployments for the same merchant. Local locking, the unique
-approved-action index, human confirmation and ambiguous-outcome reservation remain
-required. No automatic retry is performed.
+## Limits
 
-- Port 3000 already in use: stop the native Next.js process, then start Compose.
-- Missing environment configuration: fill the named `.env` variable and rerun
-  `docker compose config --quiet`. Do not print the credential value.
-- Backend unhealthy: inspect local backend logs for configuration/schema errors
-  and confirm PostgreSQL is healthy. Health checks do not validate external API credentials.
-- API reads fail: verify the Sandbox app and merchant ownership. Do not switch to
-  a production PayPal base URL or loosen the proxy's host allowlist.
-- Missing history in Docker: the databases are separate. Do not trigger an action
-  merely to populate the UI.
-- Missing Buildx: the tested Compose version falls back to the classic builder.
-  These Dockerfiles do not require BuildKit-only features.
-- Dependency audit warnings: existing frontend dependencies report npm advisories.
-  Review upgrades separately; do not run a forced breaking upgrade during a demo.
+- PayPal access is Sandbox-only. Production PayPal origins are rejected.
+- The included policy files are synthetic examples, not merchant contracts.
+- The public demo contains no live dispute or model output.
+- Local bearer authentication is not suitable for a public multi-merchant service.
+- The write checkpoint supports only one fixed dispute message.
+- A database reservation prevents repeat attempts in one deployment, but it cannot
+  provide an atomic transaction with PayPal or cross-deployment idempotency.
+- Model validation and synthetic evaluations reduce risk but do not prove factual
+  correctness or production readiness.
 
-This is not public production authentication. Keep the frontend on loopback; do
-not expose it through a public proxy, tunnel, or domain. Proper merchant login,
-authorization, database privilege separation, and deployment hardening are required
-before public deployment. Docker administrators can inspect container environment
-variables, so access to the Docker daemon must also remain trusted.
+## License
 
-The approval route still verifies ownership, explicit confirmation, current PayPal
-permission, and atomic reservation. The unique approved-message constraint remains
-unchanged. Ambiguous writes must be reconciled and are never automatically retried.
+MIT. See [`LICENSE`](LICENSE).
