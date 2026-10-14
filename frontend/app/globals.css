@@ -190,6 +190,9 @@ code,.mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-si
 .entry-card input { width:100%; border:1px solid #cbd2dc; border-radius:5px; padding:12px; background:white; color:var(--ink); }
 .entry-card form p { font-size:13px; color:var(--muted); }
 .entry-card [role=alert] { color:var(--red); }
+.entry-demo-notice { margin-top:20px; padding:13px 15px; border-left:3px solid var(--blue); background:#eef1fa; color:#414c5d; font-size:13px; }
+.entry-sample-link { display:inline-block; margin-top:20px; color:var(--blue); font-size:13px; font-weight:500; }
+.entry-sample-link:hover { text-decoration:underline; }
 .skeleton { background:#edf0f4; border-radius:6px; }
 .skeleton-summary { height:110px; margin-bottom:25px; }
 .skeleton-panel { height:420px; }

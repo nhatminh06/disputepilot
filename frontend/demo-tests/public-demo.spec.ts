@@ -57,6 +57,37 @@ test('public build configuration never loads the repository environment', () => 
   expect(output).toContain('Public configuration passed');
 });
 
+test('public home shows sample-only dispute entry', async ({ page }) => {
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { name: 'DisputePilot', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Enter a dispute ID', { exact: true })).toBeVisible();
+  await expect(page.getByText('Public demo supports sample case PP-DEMO-001 only. Live PayPal disputes are not available.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open dispute', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Explore sample dispute', exact: true })).toHaveAttribute('href', '/disputes/PP-DEMO-001');
+});
+
+test('sample dispute ID opens the public case', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Enter a dispute ID', { exact: true }).fill('PP-DEMO-001');
+  await page.getByRole('button', { name: 'Open dispute', exact: true }).click();
+  await expect(page).toHaveURL(/\/disputes\/PP-DEMO-001$/);
+  await expect(page.getByLabel('Public demo notice')).toBeVisible();
+});
+
+test('unsupported public dispute ID stays on the home page without external requests', async ({ page }) => {
+  const externalRequests: string[] = [];
+  page.on('request', request => {
+    if (new URL(request.url()).origin !== 'http://127.0.0.1:3001') externalRequests.push(request.url());
+  });
+  await page.goto('/');
+  await page.getByLabel('Enter a dispute ID', { exact: true }).fill('PP-OTHER-001');
+  await page.getByRole('button', { name: 'Open dispute', exact: true }).click();
+  await expect(page).toHaveURL(/\/?dispute_id=PP-OTHER-001$/);
+  await expect(page.getByRole('alert')).toHaveText('Only the sample case PP-DEMO-001 is available in the public demo.');
+  expect(externalRequests).toEqual([]);
+});
+
 for (const width of [1440, 390]) {
   test(`read-only example and visible labels at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
@@ -65,6 +96,7 @@ for (const width of [1440, 390]) {
       if (request.method() !== 'GET' || new URL(request.url()).origin !== 'http://127.0.0.1:3001') unexpected.push(request.url());
     });
     await page.goto('/');
+    await page.getByRole('link', { name: 'Explore sample dispute', exact: true }).click();
     await expect(page).toHaveURL(/\/disputes\/PP-DEMO-001$/);
     await expect(page.getByLabel('Public demo notice')).toContainText('synthetic examples');
     await expect(page.getByRole('heading', { name: 'Needs review', exact: true })).toBeVisible();
