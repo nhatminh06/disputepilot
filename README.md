@@ -5,6 +5,21 @@ Local-only PayPal Sandbox dispute workspace. Deterministic rules supply evidence
 and risk; Gemini recommendations are advisory. Only explicit merchant approval can
 reach the separate SEND_MESSAGE execution function.
 
+## Architecture
+
+![DisputePilot system architecture](architecture.png)
+
+The browser reaches FastAPI through the Next.js server proxy. The investigation
+path can only read dispute, order, shipping, and policy data. Deterministic rules
+produce evidence facts and risk before the bounded agent asks Gemini for an
+explanation and recommendation. Runs, evidence snapshots, and audit events are
+stored in PostgreSQL.
+
+The write path is separate from the agent. A merchant must review the recommendation
+and explicitly approve it before the approval endpoint can call the write module.
+Ownership, state, action eligibility, and duplicate execution are checked at that
+boundary. Public demo and Docker Compose modes keep PayPal writes disabled.
+
 ## Public read-only demo (Vercel Hobby)
 
 The optional public demo serves one synthetic case, `PP-DEMO-001`, entirely from
@@ -30,7 +45,8 @@ Do not add merchant, PayPal, Gemini, or database credentials to this Vercel proj
 Do not upload `.env` files, configure an upstream backend, or use a `NEXT_PUBLIC_`
 prefix for the mode flag. The flag must be set before the build and remain set at
 runtime. Public mode skips the repository-root `.env` loader and does not import
-the authenticated upstream proxy. The root page opens the example automatically.
+the authenticated upstream proxy. The root page offers the synthetic example and
+rejects other dispute IDs without an upstream lookup.
 
 For a local preview from `frontend/`:
 
